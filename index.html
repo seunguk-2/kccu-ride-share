@@ -23,6 +23,7 @@
         .inactive-row { opacity: 0.5; background-color: #f8f9fa; }
         .dep-time { font-size: 1.2rem; font-weight: bold; color: #d63384; }
     </style>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.4.4/lz-string.min.js"></script>
 </head>
 <body>
 
@@ -205,50 +206,55 @@
         }).join(''));
     }
 
-    function loadData() {
+function loadData() {
         const urlParams = new URLSearchParams(window.location.search);
         let rawData = urlParams.get('data');
 
         if(rawData) {
             try {
-                // 1. Chrome Fix: Replace spaces with +
-                if(rawData.includes(' ') && !rawData.includes('+')) {
-                    rawData = rawData.replace(/ /g, '+');
+                let jsonString;
+                
+                // 1. Try Decompressing (New Method)
+                const decompressed = LZString.decompressFromEncodedURIComponent(rawData);
+                
+                if (decompressed) {
+                    jsonString = decompressed;
+                } else {
+                    // 2. Fallback to Old Method (Base64) for old links
+                    // Chrome Fix: Replace spaces with +
+                    if(rawData.includes(' ') && !rawData.includes('+')) {
+                        rawData = rawData.replace(/ /g, '+');
+                    }
+                    // Safari Fix: Decode URI
+                    try { rawData = decodeURIComponent(rawData); } catch(e){}
+                    
+                    jsonString = atob(rawData);
                 }
-                
-                // 2. Decode using Unicode-Safe method
-                const jsonString = safeAtob(rawData);
+
                 const decoded = JSON.parse(jsonString);
-                
                 driversData = decoded.d || [];
                 passengersData = decoded.p || [];
                 
                 localStorage.setItem('driversData', JSON.stringify(driversData));
                 localStorage.setItem('passengersData', JSON.stringify(passengersData));
+                
+                // Clean URL so the long string doesn't clutter the bar
                 window.history.replaceState({}, document.title, window.location.pathname);
+                
             } catch(e) {
                 console.error("Link Error:", e);
-                // Try legacy decode for older links
-                try {
-                    const legacy = JSON.parse(atob(rawData));
-                    driversData = legacy.d;
-                    passengersData = legacy.p;
-                    localStorage.setItem('driversData', JSON.stringify(driversData));
-                    localStorage.setItem('passengersData', JSON.stringify(passengersData));
-                } catch(e2) {
-                    const errBox = document.getElementById('error-container');
-                    errBox.innerText = "⚠️ Link Error: Could not read data. Loaded local backup.";
-                    errBox.classList.remove('d-none');
-                    driversData = JSON.parse(localStorage.getItem('driversData')) || [];
-                    passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
-                }
+                const errBox = document.getElementById('error-container');
+                errBox.innerText = "⚠️ Link Corrupted. Loaded local backup.";
+                errBox.classList.remove('d-none');
+                
+                driversData = JSON.parse(localStorage.getItem('driversData')) || [];
+                passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
             }
         } else {
             driversData = JSON.parse(localStorage.getItem('driversData')) || [];
             passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
         }
     }
-
     // --- 3. MAP INITIALIZATION ---
     function initMap() {
         try {
@@ -407,22 +413,21 @@
     }
 
     // --- 6. SHARING & UTILS ---
-    
     function generateMagicLink() {
         try {
             const payload = { d: driversData, p: passengersData };
             const jsonString = JSON.stringify(payload);
             
-            // USE SAFE BTOA (Handles Korean/Emojis)
-            const base64 = safeBtoa(jsonString);
+            // COMPRESS: Shrinks data and makes it URL-safe automatically
+            // No more btoa() or encodeURIComponent() needed!
+            const compressed = LZString.compressToEncodedURIComponent(jsonString);
             
             const baseURL = window.location.origin + window.location.pathname;
-            const magicLink = `${baseURL}?data=${base64}`;
+            const magicLink = `${baseURL}?data=${compressed}`;
             
             document.getElementById('share-text-area').value = magicLink;
             shareModal.show();
             
-            // Auto-Copy
             setTimeout(() => {
                 const ta = document.getElementById('share-text-area');
                 ta.select();
@@ -430,13 +435,11 @@
                 navigator.clipboard.writeText(magicLink).then(() => {
                     document.querySelector('#shareModal .alert').innerText = "✅ Link copied!";
                     document.querySelector('#shareModal .alert').className = "alert alert-success mt-2 mb-0";
-                }).catch(e => {
-                     document.querySelector('#shareModal .alert').innerText = "⚠️ Auto-copy failed. Copy manually.";
                 });
             }, 500);
 
         } catch (e) {
-            alert("Crash during link generation: " + e.message + ". Check if you have emojis in names.");
+            alert("Error generating link: " + e.message);
         }
     }
 
