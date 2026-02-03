@@ -1,0 +1,608 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Champaign Smart Router</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body { background-color: #f0f2f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        .card { border: none; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        .header-bg { background: linear-gradient(135deg, #0d6efd, #0a58ca); color: white; padding: 2rem 0; margin-bottom: 2rem; }
+        
+        .time-input {
+            background: rgba(255, 255, 255, 0.2);
+            border: 1px solid rgba(255, 255, 255, 0.4);
+            color: white; padding: 5px 10px; border-radius: 5px; font-weight: bold; font-size: 1.2rem; cursor: pointer;
+        }
+        .time-input:focus { background: white; color: #0d6efd; outline: none; }
+        .time-input::-webkit-calendar-picker-indicator { filter: invert(1); cursor: pointer; }
+
+        .pac-container { z-index: 100000 !important; } 
+        #map { height: 550px; width: 100%; border-radius: 12px; }
+        .inactive-row { opacity: 0.5; background-color: #f8f9fa; }
+        .dep-time { font-size: 1.2rem; font-weight: bold; color: #d63384; }
+    </style>
+</head>
+<body>
+
+<div class="header-bg text-center">
+    <h1>Champaign Smart Router</h1>
+    <div class="d-flex justify-content-center align-items-center gap-3 mt-3">
+        <span>Destination: <strong>608 W Green St</strong></span>
+        <span>|</span>
+        <div class="d-flex align-items-center gap-2">
+            <span>Target Arrival:</span>
+            <input type="time" id="target-time" class="time-input" value="06:28">
+        </div>
+    </div>
+</div>
+
+<div class="container">
+    <div class="row">
+        <div class="col-lg-5">
+            <div class="alert alert-light border shadow-sm d-flex justify-content-between align-items-center mb-3">
+                <span class="fw-bold text-primary">Admin Controls:</span>
+                <div>
+                    <button class="btn btn-sm btn-outline-primary" onclick="generateMagicLink()">🔗 Create Magic Link</button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="clearAllData()">🗑️ Reset</button>
+                </div>
+            </div>
+
+            <div class="card p-3">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h5 class="m-0">🚗 Drivers</h5>
+                    <button class="btn btn-sm btn-primary" onclick="openModal('driver', -1)">+ New Driver</button>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <tbody id="drivers-list-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card p-3">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h5 class="m-0">🙋 Passengers</h5>
+                    <button class="btn btn-sm btn-primary" onclick="openModal('passenger', -1)">+ New Passenger</button>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-hover align-middle">
+                        <tbody id="passengers-list-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="d-grid gap-2">
+                <button class="btn btn-success py-3 fw-bold shadow-sm" onclick="calculateSmartRoutes()">
+                    ⚡ Generate Optimized Routes
+                </button>
+                <div class="btn-group">
+                    <button class="btn btn-outline-primary" onclick="generateShareText()">📋 Copy Text Plan</button>
+                    <button class="btn btn-outline-secondary" onclick="showDebugModal()">❓ Check Distances</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-lg-7">
+            <div class="card p-2">
+                <div id="map"></div>
+            </div>
+            <div id="results-area" class="card p-4" style="display:none; background-color: #fff9fa; border: 1px solid #pink;">
+                <h3 class="mb-4">📅 Today's Plan</h3>
+                <div id="routes-list"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="addPersonModal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="modalTitle">Manage Person</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="entry-type">
+                <input type="hidden" id="entry-index" value="-1">
+                <input type="hidden" id="entry-lat">
+                <input type="hidden" id="entry-lng">
+
+                <div class="mb-3">
+                    <label>Name</label>
+                    <input type="text" class="form-control" id="entry-name">
+                </div>
+                <div class="mb-3" id="cap-container">
+                    <label>Car Capacity</label>
+                    <input type="number" class="form-control" id="entry-cap" value="4">
+                </div>
+                <div class="mb-3">
+                    <label>Address</label>
+                    <input type="text" class="form-control" id="entry-address" 
+                           placeholder="Start typing address..." autocomplete="off"
+                           oninput="wipeCoords()">
+                    <small id="addr-warning" class="text-muted">Start typing and <strong>click</strong> the dropdown suggestion.</small>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-primary" onclick="savePerson()">Save Changes</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="debugModal">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">📍 Distance Matrix Debugger</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted">Use this to verify if the computer knows two people are at the same location (Distance should be 0 or <10m).</p>
+                <textarea id="debug-text-area" class="form-control" style="height: 400px; font-family: monospace;" readonly></textarea>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="modal fade" id="shareModal">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">📋 Shareable Result</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <textarea id="share-text-area" class="form-control" style="height: 200px;" readonly></textarea>
+                <div class="alert alert-success mt-2 mb-0">Copied to clipboard!</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+
+<script>
+    // --- 1. CONFIGURATION ---
+    const CHURCH_LOCATION = { lat: 40.1106, lng: -88.2166, address: "608 W Green St, Urbana, IL 61801" };
+    
+    let map, geocoder, directionsService;
+    let routeRenderers = []; 
+    let lastCalculatedDrivers = [];
+
+    // --- 2. DATA LOADING (MAGIC LINK LOGIC) ---
+    // Check if URL has data= param
+    const urlParams = new URLSearchParams(window.location.search);
+    const encodedData = urlParams.get('data');
+
+    let driversData = [];
+    let passengersData = [];
+
+    if(encodedData) {
+        try {
+            // Decode Base64 -> JSON
+            const decoded = JSON.parse(atob(encodedData));
+            driversData = decoded.d || [];
+            passengersData = decoded.p || [];
+            // Save to local storage so it persists if they refresh without the link
+            localStorage.setItem('driversData', JSON.stringify(driversData));
+            localStorage.setItem('passengersData', JSON.stringify(passengersData));
+            // Clean URL so it looks nice
+            window.history.replaceState({}, document.title, window.location.pathname);
+            alert("✅ Configuration loaded from Link!");
+        } catch(e) {
+            console.error(e);
+            alert("❌ Invalid Link Data");
+        }
+    } else {
+        // Load from Local Storage normally
+        driversData = JSON.parse(localStorage.getItem('driversData')) || [];
+        passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
+    }
+
+    let myModal, debugModal, shareModal; 
+
+    // --- 3. INITIALIZATION ---
+    function initMap() {
+        const champaign = { lat: 40.1106, lng: -88.225 };
+        map = new google.maps.Map(document.getElementById("map"), { zoom: 14, center: champaign });
+        directionsService = new google.maps.DirectionsService();
+        enableAutocomplete('entry-address');
+        renderLists();
+
+        if(document.getElementById('addPersonModal')) myModal = new bootstrap.Modal(document.getElementById('addPersonModal'));
+        if(document.getElementById('debugModal')) debugModal = new bootstrap.Modal(document.getElementById('debugModal'));
+        if(document.getElementById('shareModal')) shareModal = new bootstrap.Modal(document.getElementById('shareModal'));
+    }
+
+    function enableAutocomplete(id) {
+        const input = document.getElementById(id);
+        if(!input) return;
+        const options = { componentRestrictions: { country: "us" }, fields: ["formatted_address", "geometry", "name"] };
+        const autocomplete = new google.maps.places.Autocomplete(input, options);
+        
+        autocomplete.addListener('place_changed', () => {
+            const place = autocomplete.getPlace();
+            if(place.formatted_address) {
+                input.value = place.formatted_address;
+                if(place.geometry && place.geometry.location) {
+                    document.getElementById('entry-lat').value = place.geometry.location.lat();
+                    document.getElementById('entry-lng').value = place.geometry.location.lng();
+                    document.getElementById('addr-warning').innerHTML = '<span class="text-success">✅ GPS Coordinates Locked!</span>';
+                }
+            }
+        });
+    }
+    
+    function wipeCoords() {
+        document.getElementById('entry-lat').value = '';
+        document.getElementById('entry-lng').value = '';
+        document.getElementById('addr-warning').innerHTML = '<span class="text-danger">⚠️ Unsaved changes. Please select from dropdown.</span>';
+    }
+
+    // --- 4. LIST MANAGEMENT ---
+    function renderLists() {
+        const dList = document.getElementById('drivers-list-body');
+        const pList = document.getElementById('passengers-list-body');
+        dList.innerHTML = ''; pList.innerHTML = '';
+
+        driversData.forEach((d, idx) => dList.innerHTML += createRow(d, idx, 'driver'));
+        passengersData.forEach((p, idx) => pList.innerHTML += createRow(p, idx, 'passenger'));
+        
+        localStorage.setItem('driversData', JSON.stringify(driversData));
+        localStorage.setItem('passengersData', JSON.stringify(passengersData));
+    }
+
+    function createRow(item, idx, type) {
+        const isChecked = item.active ? 'checked' : '';
+        const rowClass = item.active ? '' : 'inactive-row';
+        const info = type === 'driver' ? `<small>Cap: ${item.capacity}</small>` : '';
+        const hasGPS = (item.lat && item.lng && !isNaN(item.lat));
+        const geoStatus = hasGPS 
+            ? '<span class="text-success" title="GPS Locked">📍</span>' 
+            : '<span class="text-danger" title="NO GPS DATA! Please Edit and re-select address from dropdown">⚠️ BROKEN</span>';
+
+        return `
+            <tr class="${rowClass}">
+                <td style="width:10%"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" ${isChecked} onchange="toggleActive('${type}', ${idx})"></div></td>
+                <td>
+                    <strong>${item.name}</strong> ${info} ${geoStatus}<br>
+                    <small class="text-muted text-truncate" style="max-width: 150px; display:block;">${item.address}</small>
+                </td>
+                <td class="text-end" style="width:25%">
+                    <button class="btn btn-sm btn-outline-secondary me-1" onclick="openModal('${type}', ${idx})">✏️</button>
+                    <button class="btn btn-sm btn-outline-danger" onclick="deleteItem('${type}', ${idx})">×</button>
+                </td>
+            </tr>
+        `;
+    }
+
+    function toggleActive(type, idx) {
+        if(type === 'driver') driversData[idx].active = !driversData[idx].active;
+        else passengersData[idx].active = !passengersData[idx].active;
+        renderLists();
+    }
+
+    function deleteItem(type, idx) {
+        if(confirm('Delete this person?')) {
+            if(type === 'driver') driversData.splice(idx, 1);
+            else passengersData.splice(idx, 1);
+            renderLists();
+        }
+    }
+    
+    function clearAllData() {
+        if(confirm("Are you sure you want to delete ALL data? This cannot be undone.")) {
+            driversData = [];
+            passengersData = [];
+            renderLists();
+        }
+    }
+
+    // --- 5. MODAL LOGIC ---
+    function openModal(type, index) {
+        document.getElementById('entry-type').value = type;
+        document.getElementById('entry-index').value = index;
+        document.getElementById('cap-container').style.display = type === 'driver' ? 'block' : 'none';
+        document.getElementById('entry-lat').value = '';
+        document.getElementById('entry-lng').value = '';
+        document.getElementById('addr-warning').innerHTML = 'Start typing and <strong>click</strong> the dropdown suggestion.';
+
+        if (index === -1) {
+            document.getElementById('modalTitle').innerText = "New " + (type==='driver'?'Driver':'Passenger');
+            document.getElementById('entry-name').value = '';
+            document.getElementById('entry-address').value = '';
+            document.getElementById('entry-cap').value = '4';
+        } else {
+            document.getElementById('modalTitle').innerText = "Edit " + (type==='driver'?'Driver':'Passenger');
+            const data = type === 'driver' ? driversData[index] : passengersData[index];
+            document.getElementById('entry-name').value = data.name;
+            document.getElementById('entry-address').value = data.address;
+            if(data.lat) {
+                document.getElementById('entry-lat').value = data.lat;
+                document.getElementById('entry-lng').value = data.lng;
+                document.getElementById('addr-warning').innerHTML = '<span class="text-success">✅ GPS Coordinates Locked!</span>';
+            }
+            if (type === 'driver') document.getElementById('entry-cap').value = data.capacity;
+        }
+        myModal.show();
+    }
+
+    function savePerson() {
+        const type = document.getElementById('entry-type').value;
+        const index = parseInt(document.getElementById('entry-index').value);
+        const name = document.getElementById('entry-name').value;
+        const addr = document.getElementById('entry-address').value;
+        const lat = parseFloat(document.getElementById('entry-lat').value);
+        const lng = parseFloat(document.getElementById('entry-lng').value);
+
+        if(!name || !addr) return alert("Please fill in fields");
+        if(isNaN(lat) || isNaN(lng)) return alert("STOP: You typed an address but didn't click the Dropdown suggestion. The system doesn't know where this is. Please re-type and click the Google suggestion.");
+
+        const person = { name, address: addr, lat, lng, active: true };
+        
+        if(type === 'driver') {
+            person.capacity = parseInt(document.getElementById('entry-cap').value);
+            if (index === -1) driversData.push(person);
+            else {
+                person.active = driversData[index].active; 
+                driversData[index] = person;
+            }
+        } else {
+            if (index === -1) passengersData.push(person);
+            else {
+                person.active = passengersData[index].active;
+                passengersData[index] = person;
+            }
+        }
+        renderLists();
+        myModal.hide();
+    }
+
+    // --- 6. SHARING UTILS ---
+    
+    function generateMagicLink() {
+        // Compress data into Base64 string
+        const payload = {
+            d: driversData,
+            p: passengersData
+        };
+        const jsonString = JSON.stringify(payload);
+        const encoded = btoa(jsonString); // Base64 encode
+        
+        const baseURL = window.location.origin + window.location.pathname;
+        const magicLink = `${baseURL}?data=${encoded}`;
+        
+        // Use the Share Modal to show it
+        document.getElementById('share-text-area').value = magicLink;
+        navigator.clipboard.writeText(magicLink);
+        document.querySelector('#shareModal .alert').innerText = "Link copied! Send this to your group.";
+        shareModal.show();
+    }
+
+    function generateShareText() {
+        if(!lastCalculatedDrivers.length) return alert("Please generate a schedule first!");
+        
+        let shareText = "📅 *Ride Plan*\n\n";
+        lastCalculatedDrivers.forEach(d => {
+            if(d.route.length > 0) {
+                let names = [];
+                d.route.forEach(stop => {
+                    stop.passengers.forEach(p => names.push(p.name));
+                });
+                shareText += `🚗 *${d.name}*: ${names.join(", ")}\n`;
+            }
+        });
+
+        document.getElementById('share-text-area').value = shareText;
+        navigator.clipboard.writeText(shareText);
+        document.querySelector('#shareModal .alert').innerText = "Plan copied! Paste into WhatsApp/GroupMe.";
+        shareModal.show();
+    }
+    
+    function getDistance(p1, p2) {
+        if(!p1.lat || !p2.lat) return 99999; 
+        const R = 6371; 
+        const dLat = (p2.lat - p1.lat) * Math.PI/180;
+        const dLon = (p2.lng - p1.lng) * Math.PI/180;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                  Math.cos(p1.lat * Math.PI/180) * Math.cos(p2.lat * Math.PI/180) * Math.sin(dLon/2) * Math.sin(dLon/2);
+        return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+    }
+    
+    function showDebugModal() {
+        let pool = passengersData.filter(p => p.active);
+        let txt = "";
+        if(pool.length < 2) txt = "Need at least 2 active passengers to compare distances.";
+        else {
+            for(let i=0; i<pool.length; i++) {
+                for(let j=i+1; j<pool.length; j++) {
+                    let d = getDistance(pool[i], pool[j]);
+                    let meters = Math.round(d * 1000); 
+                    txt += `${pool[i].name} ↔ ${pool[j].name} = ${meters}m\n`;
+                }
+                txt += "----------------\n";
+            }
+        }
+        document.getElementById('debug-text-area').value = txt;
+        debugModal.show();
+    }
+
+    // --- 7. CORE ALGORITHM (GROUP FIRST) ---
+
+    function calculateSmartRoutes() {
+        const timeInput = document.getElementById('target-time').value;
+        if(!timeInput) return alert("Set arrival time.");
+
+        routeRenderers.forEach(r => r.setMap(null));
+        routeRenderers = [];
+
+        let drivers = driversData.filter(d => d.active).map(d => ({
+            ...d, route: [], currentLoad: 0, currentLat: d.lat, currentLng: d.lng
+        }));
+
+        let rawPassengers = passengersData.filter(p => p.active).map(p => ({...p}));
+
+        if(drivers.length === 0) return alert("No active drivers!");
+        if(rawPassengers.length === 0) return alert("No active passengers!");
+        if(drivers.some(d => isNaN(d.lat)) || rawPassengers.some(p => isNaN(p.lat))) return alert("CRITICAL ERROR: Fix broken GPS entries marked with ⚠️.");
+
+        // 1. Group Passengers (10m Rule)
+        let stops = [];
+        while(rawPassengers.length > 0) {
+            let p = rawPassengers.pop();
+            let stop = { lat: p.lat, lng: p.lng, address: p.address, passengers: [p] };
+
+            for(let i = rawPassengers.length - 1; i >= 0; i--) {
+                let other = rawPassengers[i];
+                if(getDistance(p, other) < 0.01) { // 10m
+                    stop.passengers.push(other);
+                    rawPassengers.splice(i, 1);
+                }
+            }
+            stops.push(stop);
+        }
+        
+        // Sort: Largest groups first
+        stops.sort((a, b) => b.passengers.length - a.passengers.length);
+
+        // 2. Assign Groups to Drivers
+        while(stops.length > 0) {
+            let stop = stops.shift();
+            let groupSize = stop.passengers.length;
+            
+            let bestDriver = null;
+            let minDistance = Infinity;
+
+            // Find drivers with enough seats
+            let eligibleDrivers = drivers.filter(d => (d.capacity - d.currentLoad) >= groupSize);
+            
+            // Fallback: any driver with space
+            if (eligibleDrivers.length === 0) {
+                eligibleDrivers = drivers.filter(d => (d.capacity - d.currentLoad) > 0);
+            }
+
+            if (eligibleDrivers.length === 0) {
+                stops.unshift(stop); // Put back as leftover
+                break;
+            }
+
+            eligibleDrivers.forEach(d => {
+                let dist = getDistance({lat: d.currentLat, lng: d.currentLng}, stop);
+                if(dist < minDistance) {
+                    minDistance = dist;
+                    bestDriver = d;
+                }
+            });
+
+            if(bestDriver) {
+                let seatsAvailable = bestDriver.capacity - bestDriver.currentLoad;
+                
+                if (seatsAvailable >= groupSize) {
+                    bestDriver.route.push(stop);
+                    bestDriver.currentLoad += groupSize;
+                    bestDriver.currentLat = stop.lat;
+                    bestDriver.currentLng = stop.lng;
+                } else {
+                    // Split group
+                    let fitPeople = stop.passengers.splice(0, seatsAvailable);
+                    let partialStop = { lat: stop.lat, lng: stop.lng, address: stop.address, passengers: fitPeople };
+                    bestDriver.route.push(partialStop);
+                    bestDriver.currentLoad += fitPeople.length;
+                    bestDriver.currentLat = stop.lat;
+                    bestDriver.currentLng = stop.lng;
+                    stops.unshift(stop); 
+                }
+            }
+        }
+
+        lastCalculatedDrivers = drivers;
+        displayResults(drivers, stops, timeInput);
+    }
+
+    function displayResults(drivers, leftoverStops, timeInput) {
+        const [tHour, tMin] = timeInput.split(':').map(Number);
+        const list = document.getElementById('routes-list');
+        document.getElementById('results-area').style.display = 'block';
+        list.innerHTML = '';
+
+        const bounds = new google.maps.LatLngBounds();
+        const colors = ["#0000FF", "#FF0000", "#008000", "#FFA500", "#800080", "#008080"];
+
+        drivers.forEach((d, dIdx) => {
+            if(d.route.length === 0) return;
+
+            const waypoints = d.route.map(stop => ({ location: stop.address, stopover: true }));
+            
+            directionsService.route({
+                origin: d.address,
+                destination: CHURCH_LOCATION.address,
+                waypoints: waypoints,
+                optimizeWaypoints: true,
+                travelMode: google.maps.TravelMode.DRIVING
+            }, (response, status) => {
+                if (status === "OK") {
+                    const color = colors[dIdx % colors.length];
+                    const renderer = new google.maps.DirectionsRenderer({
+                        map: map,
+                        suppressMarkers: false,
+                        preserveViewport: true, 
+                        polylineOptions: { strokeColor: color, strokeWeight: 5 }
+                    });
+                    
+                    routeRenderers.push(renderer);
+                    renderer.setDirections(response);
+                    response.routes[0].bounds && bounds.union(response.routes[0].bounds);
+                    map.fitBounds(bounds);
+
+                    const legs = response.routes[0].legs;
+                    let totalSec = 0;
+                    legs.forEach(leg => totalSec += leg.duration.value);
+                    totalSec += (waypoints.length * 300); 
+
+                    const target = new Date();
+                    target.setHours(tHour, tMin, 0, 0);
+                    const depDate = new Date(target.getTime() - (totalSec * 1000));
+                    
+                    let html = `
+                        <div class="card p-3 border-start border-5" style="border-color: ${color} !important;">
+                            <div class="d-flex justify-content-between">
+                                <h5><span style="color:${color}">🚘</span> ${d.name} <span class="badge bg-secondary">${d.currentLoad}/${d.capacity}</span></h5>
+                                <div class="text-end">
+                                    <span class="text-muted">Depart:</span><br>
+                                    <span class="dep-time">${depDate.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
+                                </div>
+                            </div>
+                            <hr>
+                            <ul class="list-unstyled">
+                    `;
+                    const order = response.routes[0].waypoint_order;
+                    order.forEach((idx, i) => {
+                        let stop = d.route[idx];
+                        let names = stop.passengers.map(p => p.name).join(" & ");
+                        html += `<li>${i+1}. Pick up <strong>${names}</strong> <br><small class="text-muted">${stop.address}</small></li>`;
+                    });
+                    html += `</ul></div>`;
+                    list.innerHTML += html;
+
+                } else {
+                    list.innerHTML += `<div class="alert alert-danger">Error mapping ${d.name}: ${status}</div>`;
+                }
+            });
+        });
+        
+        let leftoverCount = 0;
+        leftoverStops.forEach(s => leftoverCount += s.passengers.length);
+        if(leftoverCount > 0) list.innerHTML += `<div class="alert alert-warning">⚠️ ${leftoverCount} passengers could not fit!</div>`;
+    }
+</script>
+
+<script
+    src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCH4mU6UnzIey7YtHyOg9TPaxX4K1SzpzA&callback=initMap&libraries=places&v=weekly"
+    defer
+></script>
+
+</body>
+</html>
