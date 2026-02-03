@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Champaign Smart Router</title>
+    <title>Champaign Smart Router (Chrome Fixed)</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background-color: #f0f2f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
@@ -177,17 +177,13 @@
     
     let myModal, debugModal, shareModal;
 
-    // --- 2. STARTUP LOGIC (Run Immediately) ---
+    // --- 2. STARTUP LOGIC ---
     document.addEventListener("DOMContentLoaded", function() {
-        // Initialize Modals immediately so buttons work even if Map fails
         myModal = new bootstrap.Modal(document.getElementById('addPersonModal'));
         debugModal = new bootstrap.Modal(document.getElementById('debugModal'));
         shareModal = new bootstrap.Modal(document.getElementById('shareModal'));
 
-        // Load Data (Try Link First, then Local Storage)
         loadData();
-        
-        // Render the UI Boxes
         renderLists();
     });
 
@@ -197,17 +193,18 @@
 
         if(rawData) {
             try {
-                // FIX FOR CHROME: Replace spaces with + if they got garbled
+                // --- CHROME FIX: Replace spaces with '+' symbols ---
+                // Chrome URL-decodes the '+' into ' ' automatically. We reverse it.
                 if(rawData.includes(' ') && !rawData.includes('+')) {
                     rawData = rawData.replace(/ /g, '+');
                 }
                 
-                // Decode URI (safari fix) then Decode Base64
+                // Decode URI components just in case Safari double-encoded it
                 let jsonString;
                 try {
                     jsonString = atob(decodeURIComponent(rawData));
                 } catch(e) {
-                    // Fallback if not URI encoded
+                    // If decodeURIComponent fails, try direct Base64 decode
                     jsonString = atob(rawData);
                 }
 
@@ -231,7 +228,7 @@
         }
     }
 
-    // --- 3. MAP INITIALIZATION (Run Async) ---
+    // --- 3. MAP INITIALIZATION ---
     function initMap() {
         try {
             const champaign = { lat: 40.1106, lng: -88.225 };
@@ -240,13 +237,12 @@
             enableAutocomplete('entry-address');
         } catch(e) {
             console.error("Map failed to load:", e);
-            document.getElementById("map").innerHTML = "<div class='p-5 text-center text-muted'>Map could not load (Check API Key).<br>Calculations will still work!</div>";
         }
     }
 
     function enableAutocomplete(id) {
         const input = document.getElementById(id);
-        if(!input || !window.google) return; // Safety check
+        if(!input || !window.google) return;
         const options = { componentRestrictions: { country: "us" }, fields: ["formatted_address", "geometry", "name"] };
         const autocomplete = new google.maps.places.Autocomplete(input, options);
         
@@ -273,7 +269,7 @@
     function renderLists() {
         const dList = document.getElementById('drivers-list-body');
         const pList = document.getElementById('passengers-list-body');
-        if(!dList || !pList) return; // Safety
+        if(!dList || !pList) return; 
 
         dList.innerHTML = ''; pList.innerHTML = '';
 
@@ -394,8 +390,8 @@
     function generateMagicLink() {
         const payload = { d: driversData, p: passengersData };
         const jsonString = JSON.stringify(payload);
-        // SAFARI SAFE ENCODING:
         const base64 = btoa(jsonString);
+        // ENCODE COMPONENT to ensure Safari handles it correctly
         const safeEncoded = encodeURIComponent(base64);
         
         const baseURL = window.location.origin + window.location.pathname;
@@ -404,7 +400,6 @@
         document.getElementById('share-text-area').value = magicLink;
         shareModal.show();
         
-        // Auto-select text
         setTimeout(() => {
             const ta = document.getElementById('share-text-area');
             ta.select();
@@ -430,7 +425,6 @@
         document.getElementById('share-text-area').value = shareText;
         shareModal.show();
         
-        // Auto-select text
         setTimeout(() => {
             const ta = document.getElementById('share-text-area');
             ta.select();
@@ -473,7 +467,6 @@
         const timeInput = document.getElementById('target-time').value;
         if(!timeInput) return alert("Set arrival time.");
 
-        // Clear Map
         if(window.google) {
             routeRenderers.forEach(r => r.setMap(null));
             routeRenderers = [];
@@ -592,12 +585,10 @@
 
                         renderDriverCard(d, color, response.routes[0].legs, waypoints, tHour, tMin);
                     } else {
-                        // Fallback card without time calculation
                         renderDriverCard(d, "#333", [], waypoints, tHour, tMin, true);
                     }
                 });
             } else {
-                // Offline/No-Map Mode
                 renderDriverCard(d, "#333", [], waypoints, tHour, tMin, true);
             }
         });
