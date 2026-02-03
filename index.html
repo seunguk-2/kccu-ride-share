@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Champaign Smart Router (Chrome Fixed)</title>
+    <title>KCCU Rideshare Planning</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <style>
         body { background-color: #f0f2f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
@@ -27,7 +27,7 @@
 <body>
 
 <div class="header-bg text-center">
-    <h1>Champaign Smart Router</h1>
+    <h1>KCCU Rideshare Planning</h1>
     <div class="d-flex justify-content-center align-items-center gap-3 mt-3">
         <span>Destination: <strong>608 W Green St</strong></span>
         <span>|</span>
@@ -39,6 +39,8 @@
 </div>
 
 <div class="container">
+    <div id="error-container" class="alert alert-danger d-none"></div>
+
     <div class="row">
         <div class="col-lg-5">
             <div class="alert alert-light border shadow-sm d-flex justify-content-between align-items-center mb-3">
@@ -179,13 +181,29 @@
 
     // --- 2. STARTUP LOGIC ---
     document.addEventListener("DOMContentLoaded", function() {
-        myModal = new bootstrap.Modal(document.getElementById('addPersonModal'));
-        debugModal = new bootstrap.Modal(document.getElementById('debugModal'));
-        shareModal = new bootstrap.Modal(document.getElementById('shareModal'));
+        const m1 = document.getElementById('addPersonModal');
+        const m2 = document.getElementById('debugModal');
+        const m3 = document.getElementById('shareModal');
+        if(m1) myModal = new bootstrap.Modal(m1);
+        if(m2) debugModal = new bootstrap.Modal(m2);
+        if(m3) shareModal = new bootstrap.Modal(m3);
 
         loadData();
         renderLists();
     });
+
+    // --- HELPER: UNICODE-SAFE BASE64 ---
+    // Standard btoa() crashes on Korean/Emojis. These functions fix that.
+    function safeBtoa(str) {
+        return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, function(match, p1) {
+            return String.fromCharCode('0x' + p1);
+        }));
+    }
+    function safeAtob(str) {
+        return decodeURIComponent(atob(str).split('').map(function(c) {
+            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+        }).join(''));
+    }
 
     function loadData() {
         const urlParams = new URLSearchParams(window.location.search);
@@ -193,34 +211,37 @@
 
         if(rawData) {
             try {
-                // --- CHROME FIX: Replace spaces with '+' symbols ---
-                // Chrome URL-decodes the '+' into ' ' automatically. We reverse it.
+                // 1. Chrome Fix: Replace spaces with +
                 if(rawData.includes(' ') && !rawData.includes('+')) {
                     rawData = rawData.replace(/ /g, '+');
                 }
                 
-                // Decode URI components just in case Safari double-encoded it
-                let jsonString;
-                try {
-                    jsonString = atob(decodeURIComponent(rawData));
-                } catch(e) {
-                    // If decodeURIComponent fails, try direct Base64 decode
-                    jsonString = atob(rawData);
-                }
-
+                // 2. Decode using Unicode-Safe method
+                const jsonString = safeAtob(rawData);
                 const decoded = JSON.parse(jsonString);
+                
                 driversData = decoded.d || [];
                 passengersData = decoded.p || [];
                 
-                // Save and Clean URL
                 localStorage.setItem('driversData', JSON.stringify(driversData));
                 localStorage.setItem('passengersData', JSON.stringify(passengersData));
                 window.history.replaceState({}, document.title, window.location.pathname);
             } catch(e) {
                 console.error("Link Error:", e);
-                // Fallback to local storage
-                driversData = JSON.parse(localStorage.getItem('driversData')) || [];
-                passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
+                // Try legacy decode for older links
+                try {
+                    const legacy = JSON.parse(atob(rawData));
+                    driversData = legacy.d;
+                    passengersData = legacy.p;
+                    localStorage.setItem('driversData', JSON.stringify(driversData));
+                    localStorage.setItem('passengersData', JSON.stringify(passengersData));
+                } catch(e2) {
+                    const errBox = document.getElementById('error-container');
+                    errBox.innerText = "⚠️ Link Error: Could not read data. Loaded local backup.";
+                    errBox.classList.remove('d-none');
+                    driversData = JSON.parse(localStorage.getItem('driversData')) || [];
+                    passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
+                }
             }
         } else {
             driversData = JSON.parse(localStorage.getItem('driversData')) || [];
@@ -388,24 +409,35 @@
     // --- 6. SHARING & UTILS ---
     
     function generateMagicLink() {
-        const payload = { d: driversData, p: passengersData };
-        const jsonString = JSON.stringify(payload);
-        const base64 = btoa(jsonString);
-        // ENCODE COMPONENT to ensure Safari handles it correctly
-        const safeEncoded = encodeURIComponent(base64);
-        
-        const baseURL = window.location.origin + window.location.pathname;
-        const magicLink = `${baseURL}?data=${safeEncoded}`;
-        
-        document.getElementById('share-text-area').value = magicLink;
-        shareModal.show();
-        
-        setTimeout(() => {
-            const ta = document.getElementById('share-text-area');
-            ta.select();
-            ta.setSelectionRange(0, 99999);
-            navigator.clipboard.writeText(magicLink).catch(() => {});
-        }, 500);
+        try {
+            const payload = { d: driversData, p: passengersData };
+            const jsonString = JSON.stringify(payload);
+            
+            // USE SAFE BTOA (Handles Korean/Emojis)
+            const base64 = safeBtoa(jsonString);
+            
+            const baseURL = window.location.origin + window.location.pathname;
+            const magicLink = `${baseURL}?data=${base64}`;
+            
+            document.getElementById('share-text-area').value = magicLink;
+            shareModal.show();
+            
+            // Auto-Copy
+            setTimeout(() => {
+                const ta = document.getElementById('share-text-area');
+                ta.select();
+                ta.setSelectionRange(0, 99999);
+                navigator.clipboard.writeText(magicLink).then(() => {
+                    document.querySelector('#shareModal .alert').innerText = "✅ Link copied!";
+                    document.querySelector('#shareModal .alert').className = "alert alert-success mt-2 mb-0";
+                }).catch(e => {
+                     document.querySelector('#shareModal .alert').innerText = "⚠️ Auto-copy failed. Copy manually.";
+                });
+            }, 500);
+
+        } catch (e) {
+            alert("Crash during link generation: " + e.message + ". Check if you have emojis in names.");
+        }
     }
 
     function generateShareText() {
