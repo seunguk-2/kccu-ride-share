@@ -219,37 +219,6 @@
         passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
     }
 
-    let driversData = [];
-    let passengersData = [];
-
-    if(rawData) {
-        try {
-            // 1. DECODE URI Component (Fixes Safari's garbled URL issue)
-            const cleanBase64 = decodeURIComponent(rawData);
-            
-            // 2. DECODE Base64 to JSON
-            const jsonString = atob(cleanBase64);
-            const decoded = JSON.parse(jsonString);
-            
-            driversData = decoded.d || [];
-            passengersData = decoded.p || [];
-            
-            // 3. Save to local storage
-            localStorage.setItem('driversData', JSON.stringify(driversData));
-            localStorage.setItem('passengersData', JSON.stringify(passengersData));
-            
-            // 4. Clean URL
-            window.history.replaceState({}, document.title, window.location.pathname);
-            alert("✅ Configuration loaded from Link!");
-        } catch(e) {
-            console.error(e);
-            alert("❌ Invalid Link Data. Please generate a new link.");
-        }
-    } else {
-        // Load from Local Storage normally
-        driversData = JSON.parse(localStorage.getItem('driversData')) || [];
-        passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
-    }
 
     let myModal, debugModal, shareModal; 
 
