@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>KCCU Rideshare Planning</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.4.4/lz-string.min.js"></script>
     <style>
         body { background-color: #f0f2f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         .card { border: none; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 20px; }
@@ -23,7 +24,6 @@
         .inactive-row { opacity: 0.5; background-color: #f8f9fa; }
         .dep-time { font-size: 1.2rem; font-weight: bold; color: #d63384; }
     </style>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/lz-string/1.4.4/lz-string.min.js"></script>
 </head>
 <body>
 
@@ -55,7 +55,11 @@
             <div class="card p-3">
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <h5 class="m-0">🚗 Drivers</h5>
-                    <button class="btn btn-sm btn-primary" onclick="openModal('driver', -1)">+ New Driver</button>
+                    <div>
+                        <button class="btn btn-sm btn-outline-secondary py-0" onclick="setAll('driver', true)">All</button>
+                        <button class="btn btn-sm btn-outline-secondary py-0 me-2" onclick="setAll('driver', false)">None</button>
+                        <button class="btn btn-sm btn-primary" onclick="openModal('driver', -1)">+ New</button>
+                    </div>
                 </div>
                 <div class="table-responsive">
                     <table class="table table-hover align-middle">
@@ -67,7 +71,11 @@
             <div class="card p-3">
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <h5 class="m-0">🙋 Passengers</h5>
-                    <button class="btn btn-sm btn-primary" onclick="openModal('passenger', -1)">+ New Passenger</button>
+                    <div>
+                        <button class="btn btn-sm btn-outline-secondary py-0" onclick="setAll('passenger', true)">All</button>
+                        <button class="btn btn-sm btn-outline-secondary py-0 me-2" onclick="setAll('passenger', false)">None</button>
+                        <button class="btn btn-sm btn-primary" onclick="openModal('passenger', -1)">+ New</button>
+                    </div>
                 </div>
                 <div class="table-responsive">
                     <table class="table table-hover align-middle">
@@ -193,20 +201,7 @@
         renderLists();
     });
 
-    // --- HELPER: UNICODE-SAFE BASE64 ---
-    // Standard btoa() crashes on Korean/Emojis. These functions fix that.
-    function safeBtoa(str) {
-        return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, function(match, p1) {
-            return String.fromCharCode('0x' + p1);
-        }));
-    }
-    function safeAtob(str) {
-        return decodeURIComponent(atob(str).split('').map(function(c) {
-            return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
-        }).join(''));
-    }
-
-function loadData() {
+    function loadData() {
         const urlParams = new URLSearchParams(window.location.search);
         let rawData = urlParams.get('data');
 
@@ -214,20 +209,18 @@ function loadData() {
             try {
                 let jsonString;
                 
-                // 1. Try Decompressing (New Method)
+                // 1. Try Decompressing (Short Links)
                 const decompressed = LZString.decompressFromEncodedURIComponent(rawData);
                 
                 if (decompressed) {
                     jsonString = decompressed;
                 } else {
-                    // 2. Fallback to Old Method (Base64) for old links
+                    // 2. Fallback to Base64 (Old Links)
                     // Chrome Fix: Replace spaces with +
                     if(rawData.includes(' ') && !rawData.includes('+')) {
                         rawData = rawData.replace(/ /g, '+');
                     }
-                    // Safari Fix: Decode URI
                     try { rawData = decodeURIComponent(rawData); } catch(e){}
-                    
                     jsonString = atob(rawData);
                 }
 
@@ -238,9 +231,8 @@ function loadData() {
                 localStorage.setItem('driversData', JSON.stringify(driversData));
                 localStorage.setItem('passengersData', JSON.stringify(passengersData));
                 
-                // Clean URL so the long string doesn't clutter the bar
+                // Clean URL
                 window.history.replaceState({}, document.title, window.location.pathname);
-                
             } catch(e) {
                 console.error("Link Error:", e);
                 const errBox = document.getElementById('error-container');
@@ -255,6 +247,7 @@ function loadData() {
             passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
         }
     }
+
     // --- 3. MAP INITIALIZATION ---
     function initMap() {
         try {
@@ -336,6 +329,13 @@ function loadData() {
         else passengersData[idx].active = !passengersData[idx].active;
         renderLists();
     }
+    
+    // NEW FUNCTION: Sets all to active (true) or inactive (false)
+    function setAll(type, activeStatus) {
+        if(type === 'driver') driversData.forEach(d => d.active = activeStatus);
+        else passengersData.forEach(p => p.active = activeStatus);
+        renderLists();
+    }
 
     function deleteItem(type, idx) {
         if(confirm('Delete this person?')) {
@@ -413,13 +413,13 @@ function loadData() {
     }
 
     // --- 6. SHARING & UTILS ---
+    
     function generateMagicLink() {
         try {
             const payload = { d: driversData, p: passengersData };
             const jsonString = JSON.stringify(payload);
             
-            // COMPRESS: Shrinks data and makes it URL-safe automatically
-            // No more btoa() or encodeURIComponent() needed!
+            // USE LZSTRING COMPRESSION (Short & Safe)
             const compressed = LZString.compressToEncodedURIComponent(jsonString);
             
             const baseURL = window.location.origin + window.location.pathname;
@@ -435,11 +435,13 @@ function loadData() {
                 navigator.clipboard.writeText(magicLink).then(() => {
                     document.querySelector('#shareModal .alert').innerText = "✅ Link copied!";
                     document.querySelector('#shareModal .alert').className = "alert alert-success mt-2 mb-0";
+                }).catch(e => {
+                     document.querySelector('#shareModal .alert').innerText = "⚠️ Auto-copy failed. Copy manually.";
                 });
             }, 500);
 
         } catch (e) {
-            alert("Error generating link: " + e.message);
+            alert("Crash during link generation: " + e.message);
         }
     }
 
