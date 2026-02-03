@@ -174,27 +174,35 @@
 
     // --- 2. DATA LOADING (MAGIC LINK LOGIC) ---
     // Check if URL has data= param
+    // --- 2. DATA LOADING (MAGIC LINK LOGIC) ---
     const urlParams = new URLSearchParams(window.location.search);
-    const encodedData = urlParams.get('data');
+    const rawData = urlParams.get('data');
 
     let driversData = [];
     let passengersData = [];
 
-    if(encodedData) {
+    if(rawData) {
         try {
-            // Decode Base64 -> JSON
-            const decoded = JSON.parse(atob(encodedData));
+            // 1. DECODE URI Component (Fixes Safari's garbled URL issue)
+            const cleanBase64 = decodeURIComponent(rawData);
+            
+            // 2. DECODE Base64 to JSON
+            const jsonString = atob(cleanBase64);
+            const decoded = JSON.parse(jsonString);
+            
             driversData = decoded.d || [];
             passengersData = decoded.p || [];
-            // Save to local storage so it persists if they refresh without the link
+            
+            // 3. Save to local storage
             localStorage.setItem('driversData', JSON.stringify(driversData));
             localStorage.setItem('passengersData', JSON.stringify(passengersData));
-            // Clean URL so it looks nice
+            
+            // 4. Clean URL
             window.history.replaceState({}, document.title, window.location.pathname);
             alert("✅ Configuration loaded from Link!");
         } catch(e) {
             console.error(e);
-            alert("❌ Invalid Link Data");
+            alert("❌ Invalid Link Data. Please generate a new link.");
         }
     } else {
         // Load from Local Storage normally
@@ -363,24 +371,30 @@
 
     // --- 6. SHARING UTILS ---
     
-    function generateMagicLink() {
-        // Compress data into Base64 string
-        const payload = {
-            d: driversData,
-            p: passengersData
-        };
-        const jsonString = JSON.stringify(payload);
-        const encoded = btoa(jsonString); // Base64 encode
-        
-        const baseURL = window.location.origin + window.location.pathname;
-        const magicLink = `${baseURL}?data=${encoded}`;
-        
-        // Use the Share Modal to show it
-        document.getElementById('share-text-area').value = magicLink;
-        navigator.clipboard.writeText(magicLink);
-        document.querySelector('#shareModal .alert').innerText = "Link copied! Send this to your group.";
-        shareModal.show();
-    }
+        function generateMagicLink() {
+                // 1. Create the data payload
+                const payload = {
+                    d: driversData,
+                    p: passengersData
+                };
+                const jsonString = JSON.stringify(payload);
+                
+                // 2. Encode to Base64
+                const base64 = btoa(jsonString);
+                
+                // 3. CRITICAL FIX: Encode special chars for Safari/iOS
+                // This turns "+" into "%2B", "/" into "%2F", etc. so the browser doesn't break.
+                const safeEncoded = encodeURIComponent(base64);
+                
+                const baseURL = window.location.origin + window.location.pathname;
+                const magicLink = `${baseURL}?data=${safeEncoded}`;
+                
+                // 4. Show it
+                document.getElementById('share-text-area').value = magicLink;
+                navigator.clipboard.writeText(magicLink);
+                document.querySelector('#shareModal .alert').innerText = "Link copied! Send this to your group.";
+                shareModal.show();
+            }
 
     function generateShareText() {
         if(!lastCalculatedDrivers.length) return alert("Please generate a schedule first!");
