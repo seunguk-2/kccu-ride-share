@@ -19,7 +19,7 @@
         .time-input::-webkit-calendar-picker-indicator { filter: invert(1); cursor: pointer; }
 
         .pac-container { z-index: 100000 !important; } 
-        #map { height: 550px; width: 100%; border-radius: 12px; }
+        #map { height: 550px; width: 100%; border-radius: 12px; background-color: #e9ecef; }
         .inactive-row { opacity: 0.5; background-color: #f8f9fa; }
         .dep-time { font-size: 1.2rem; font-weight: bold; color: #d63384; }
     </style>
@@ -172,72 +172,81 @@
     let routeRenderers = []; 
     let lastCalculatedDrivers = [];
 
-    // --- 2. DATA LOADING (MAGIC LINK LOGIC) ---
-    // Check if URL has data= param
-    // --- 2. DATA LOADING (MAGIC LINK LOGIC) ---
-    // --- 2. DATA LOADING (MAGIC LINK LOGIC) ---
-    const urlParams = new URLSearchParams(window.location.search);
-    let rawData = urlParams.get('data');
-
     let driversData = [];
     let passengersData = [];
+    
+    let myModal, debugModal, shareModal;
 
-    if(rawData) {
-        try {
-            // FIX 1: Chrome turns '+' into spaces. We must turn them back to '+' for Base64 to work.
-            let cleanBase64 = rawData.replace(/ /g, '+');
-            
-            // FIX 2: Handle cases where the link might be double-encoded or raw
-            // We try to decode URI components, but if it fails (because it's already raw), we ignore the error.
+    // --- 2. STARTUP LOGIC (Run Immediately) ---
+    document.addEventListener("DOMContentLoaded", function() {
+        // Initialize Modals immediately so buttons work even if Map fails
+        myModal = new bootstrap.Modal(document.getElementById('addPersonModal'));
+        debugModal = new bootstrap.Modal(document.getElementById('debugModal'));
+        shareModal = new bootstrap.Modal(document.getElementById('shareModal'));
+
+        // Load Data (Try Link First, then Local Storage)
+        loadData();
+        
+        // Render the UI Boxes
+        renderLists();
+    });
+
+    function loadData() {
+        const urlParams = new URLSearchParams(window.location.search);
+        let rawData = urlParams.get('data');
+
+        if(rawData) {
             try {
-                cleanBase64 = decodeURIComponent(cleanBase64);
-            } catch(e) {
-                // It wasn't encoded, so we use the string as-is.
-            }
+                // FIX FOR CHROME: Replace spaces with + if they got garbled
+                if(rawData.includes(' ') && !rawData.includes('+')) {
+                    rawData = rawData.replace(/ /g, '+');
+                }
+                
+                // Decode URI (safari fix) then Decode Base64
+                let jsonString;
+                try {
+                    jsonString = atob(decodeURIComponent(rawData));
+                } catch(e) {
+                    // Fallback if not URI encoded
+                    jsonString = atob(rawData);
+                }
 
-            // Decode Base64 to JSON
-            const jsonString = atob(cleanBase64);
-            const decoded = JSON.parse(jsonString);
-            
-            driversData = decoded.d || [];
-            passengersData = decoded.p || [];
-            
-            // Save to local storage
-            localStorage.setItem('driversData', JSON.stringify(driversData));
-            localStorage.setItem('passengersData', JSON.stringify(passengersData));
-            
-            // Clean URL
-            window.history.replaceState({}, document.title, window.location.pathname);
-            alert("✅ Configuration loaded from Link!");
-        } catch(e) {
-            console.error(e);
-            alert("❌ Link Broken: " + e.message + "\n\nTry re-generating the link from the source computer.");
+                const decoded = JSON.parse(jsonString);
+                driversData = decoded.d || [];
+                passengersData = decoded.p || [];
+                
+                // Save and Clean URL
+                localStorage.setItem('driversData', JSON.stringify(driversData));
+                localStorage.setItem('passengersData', JSON.stringify(passengersData));
+                window.history.replaceState({}, document.title, window.location.pathname);
+            } catch(e) {
+                console.error("Link Error:", e);
+                // Fallback to local storage
+                driversData = JSON.parse(localStorage.getItem('driversData')) || [];
+                passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
+            }
+        } else {
+            driversData = JSON.parse(localStorage.getItem('driversData')) || [];
+            passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
         }
-    } else {
-        // Load from Local Storage normally
-        driversData = JSON.parse(localStorage.getItem('driversData')) || [];
-        passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
     }
 
-
-    let myModal, debugModal, shareModal; 
-
-    // --- 3. INITIALIZATION ---
+    // --- 3. MAP INITIALIZATION (Run Async) ---
     function initMap() {
-        const champaign = { lat: 40.1106, lng: -88.225 };
-        map = new google.maps.Map(document.getElementById("map"), { zoom: 14, center: champaign });
-        directionsService = new google.maps.DirectionsService();
-        enableAutocomplete('entry-address');
-        renderLists();
-
-        if(document.getElementById('addPersonModal')) myModal = new bootstrap.Modal(document.getElementById('addPersonModal'));
-        if(document.getElementById('debugModal')) debugModal = new bootstrap.Modal(document.getElementById('debugModal'));
-        if(document.getElementById('shareModal')) shareModal = new bootstrap.Modal(document.getElementById('shareModal'));
+        try {
+            const champaign = { lat: 40.1106, lng: -88.225 };
+            map = new google.maps.Map(document.getElementById("map"), { zoom: 14, center: champaign });
+            directionsService = new google.maps.DirectionsService();
+            enableAutocomplete('entry-address');
+        } catch(e) {
+            console.error("Map failed to load:", e);
+            document.getElementById("map").innerHTML = "<div class='p-5 text-center text-muted'>Map could not load (Check API Key).<br>Calculations will still work!</div>";
+        }
     }
 
     function enableAutocomplete(id) {
         const input = document.getElementById(id);
-        if(!input) return;
+        if(!input || !window.google) return; // Safety check
         const options = { componentRestrictions: { country: "us" }, fields: ["formatted_address", "geometry", "name"] };
         const autocomplete = new google.maps.places.Autocomplete(input, options);
         
@@ -264,6 +273,8 @@
     function renderLists() {
         const dList = document.getElementById('drivers-list-body');
         const pList = document.getElementById('passengers-list-body');
+        if(!dList || !pList) return; // Safety
+
         dList.innerHTML = ''; pList.innerHTML = '';
 
         driversData.forEach((d, idx) => dList.innerHTML += createRow(d, idx, 'driver'));
@@ -312,9 +323,8 @@
     }
     
     function clearAllData() {
-        if(confirm("Are you sure you want to delete ALL data? This cannot be undone.")) {
-            driversData = [];
-            passengersData = [];
+        if(confirm("Are you sure you want to delete ALL data?")) {
+            driversData = []; passengersData = [];
             renderLists();
         }
     }
@@ -379,53 +389,28 @@
         myModal.hide();
     }
 
-    // --- 6. SHARING UTILS ---
+    // --- 6. SHARING & UTILS ---
     
     function generateMagicLink() {
-        // 1. Prepare Data
-        const payload = {
-            d: driversData,
-            p: passengersData
-        };
+        const payload = { d: driversData, p: passengersData };
         const jsonString = JSON.stringify(payload);
+        // SAFARI SAFE ENCODING:
         const base64 = btoa(jsonString);
-        
-        // SAFARI FIX: Use encodeURIComponent to handle special characters
         const safeEncoded = encodeURIComponent(base64);
         
         const baseURL = window.location.origin + window.location.pathname;
         const magicLink = `${baseURL}?data=${safeEncoded}`;
         
-        // 2. Populate the box
-        const textArea = document.getElementById('share-text-area');
-        textArea.value = magicLink;
-        
-        // 3. Show the Modal FIRST (Crucial: Can't copy from a hidden box)
+        document.getElementById('share-text-area').value = magicLink;
         shareModal.show();
-
-        // 4. Wait for modal to appear, then try to copy
+        
+        // Auto-select text
         setTimeout(() => {
-            textArea.focus();
-            textArea.select();
-            textArea.setSelectionRange(0, 99999); // For mobile devices
-
-            // Try Modern Copy
-            navigator.clipboard.writeText(magicLink).then(() => {
-                document.querySelector('#shareModal .alert').innerText = "✅ Link copied to clipboard!";
-                document.querySelector('#shareModal .alert').className = "alert alert-success mt-2 mb-0";
-            }).catch(() => {
-                // Fallback: Old School Copy
-                try {
-                    document.execCommand('copy');
-                    document.querySelector('#shareModal .alert').innerText = "✅ Link copied to clipboard!";
-                    document.querySelector('#shareModal .alert').className = "alert alert-success mt-2 mb-0";
-                } catch (e) {
-                    // Final Fail: Ask user to copy manually
-                    document.querySelector('#shareModal .alert').innerText = "⚠️ Auto-copy failed. Please copy the text below manually.";
-                    document.querySelector('#shareModal .alert').className = "alert alert-warning mt-2 mb-0";
-                }
-            });
-        }, 500); // Small delay to ensure modal is visible
+            const ta = document.getElementById('share-text-area');
+            ta.select();
+            ta.setSelectionRange(0, 99999);
+            navigator.clipboard.writeText(magicLink).catch(() => {});
+        }, 500);
     }
 
     function generateShareText() {
@@ -443,9 +428,15 @@
         });
 
         document.getElementById('share-text-area').value = shareText;
-        navigator.clipboard.writeText(shareText);
-        document.querySelector('#shareModal .alert').innerText = "Plan copied! Paste into WhatsApp/GroupMe.";
         shareModal.show();
+        
+        // Auto-select text
+        setTimeout(() => {
+            const ta = document.getElementById('share-text-area');
+            ta.select();
+            ta.setSelectionRange(0, 99999);
+            navigator.clipboard.writeText(shareText).catch(() => {});
+        }, 500);
     }
     
     function getDistance(p1, p2) {
@@ -482,8 +473,11 @@
         const timeInput = document.getElementById('target-time').value;
         if(!timeInput) return alert("Set arrival time.");
 
-        routeRenderers.forEach(r => r.setMap(null));
-        routeRenderers = [];
+        // Clear Map
+        if(window.google) {
+            routeRenderers.forEach(r => r.setMap(null));
+            routeRenderers = [];
+        }
 
         let drivers = driversData.filter(d => d.active).map(d => ({
             ...d, route: [], currentLoad: 0, currentLat: d.lat, currentLng: d.lng
@@ -511,27 +505,23 @@
             stops.push(stop);
         }
         
-        // Sort: Largest groups first
         stops.sort((a, b) => b.passengers.length - a.passengers.length);
 
         // 2. Assign Groups to Drivers
         while(stops.length > 0) {
             let stop = stops.shift();
             let groupSize = stop.passengers.length;
-            
             let bestDriver = null;
             let minDistance = Infinity;
 
-            // Find drivers with enough seats
             let eligibleDrivers = drivers.filter(d => (d.capacity - d.currentLoad) >= groupSize);
             
-            // Fallback: any driver with space
             if (eligibleDrivers.length === 0) {
                 eligibleDrivers = drivers.filter(d => (d.capacity - d.currentLoad) > 0);
             }
 
             if (eligibleDrivers.length === 0) {
-                stops.unshift(stop); // Put back as leftover
+                stops.unshift(stop); 
                 break;
             }
 
@@ -545,14 +535,12 @@
 
             if(bestDriver) {
                 let seatsAvailable = bestDriver.capacity - bestDriver.currentLoad;
-                
                 if (seatsAvailable >= groupSize) {
                     bestDriver.route.push(stop);
                     bestDriver.currentLoad += groupSize;
                     bestDriver.currentLat = stop.lat;
                     bestDriver.currentLng = stop.lng;
                 } else {
-                    // Split group
                     let fitPeople = stop.passengers.splice(0, seatsAvailable);
                     let partialStop = { lat: stop.lat, lng: stop.lng, address: stop.address, passengers: fitPeople };
                     bestDriver.route.push(partialStop);
@@ -574,7 +562,7 @@
         document.getElementById('results-area').style.display = 'block';
         list.innerHTML = '';
 
-        const bounds = new google.maps.LatLngBounds();
+        const bounds = window.google ? new google.maps.LatLngBounds() : null;
         const colors = ["#0000FF", "#FF0000", "#008000", "#FFA500", "#800080", "#008080"];
 
         drivers.forEach((d, dIdx) => {
@@ -582,66 +570,74 @@
 
             const waypoints = d.route.map(stop => ({ location: stop.address, stopover: true }));
             
-            directionsService.route({
-                origin: d.address,
-                destination: CHURCH_LOCATION.address,
-                waypoints: waypoints,
-                optimizeWaypoints: true,
-                travelMode: google.maps.TravelMode.DRIVING
-            }, (response, status) => {
-                if (status === "OK") {
-                    const color = colors[dIdx % colors.length];
-                    const renderer = new google.maps.DirectionsRenderer({
-                        map: map,
-                        suppressMarkers: false,
-                        preserveViewport: true, 
-                        polylineOptions: { strokeColor: color, strokeWeight: 5 }
-                    });
-                    
-                    routeRenderers.push(renderer);
-                    renderer.setDirections(response);
-                    response.routes[0].bounds && bounds.union(response.routes[0].bounds);
-                    map.fitBounds(bounds);
+            // Only use Map API if available
+            if(window.google) {
+                directionsService.route({
+                    origin: d.address,
+                    destination: CHURCH_LOCATION.address,
+                    waypoints: waypoints,
+                    optimizeWaypoints: true,
+                    travelMode: google.maps.TravelMode.DRIVING
+                }, (response, status) => {
+                    if (status === "OK") {
+                        const color = colors[dIdx % colors.length];
+                        const renderer = new google.maps.DirectionsRenderer({
+                            map: map, suppressMarkers: false, preserveViewport: true, 
+                            polylineOptions: { strokeColor: color, strokeWeight: 5 }
+                        });
+                        routeRenderers.push(renderer);
+                        renderer.setDirections(response);
+                        response.routes[0].bounds && bounds.union(response.routes[0].bounds);
+                        map.fitBounds(bounds);
 
-                    const legs = response.routes[0].legs;
-                    let totalSec = 0;
-                    legs.forEach(leg => totalSec += leg.duration.value);
-                    totalSec += (waypoints.length * 300); 
-
-                    const target = new Date();
-                    target.setHours(tHour, tMin, 0, 0);
-                    const depDate = new Date(target.getTime() - (totalSec * 1000));
-                    
-                    let html = `
-                        <div class="card p-3 border-start border-5" style="border-color: ${color} !important;">
-                            <div class="d-flex justify-content-between">
-                                <h5><span style="color:${color}">🚘</span> ${d.name} <span class="badge bg-secondary">${d.currentLoad}/${d.capacity}</span></h5>
-                                <div class="text-end">
-                                    <span class="text-muted">Depart:</span><br>
-                                    <span class="dep-time">${depDate.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'})}</span>
-                                </div>
-                            </div>
-                            <hr>
-                            <ul class="list-unstyled">
-                    `;
-                    const order = response.routes[0].waypoint_order;
-                    order.forEach((idx, i) => {
-                        let stop = d.route[idx];
-                        let names = stop.passengers.map(p => p.name).join(" & ");
-                        html += `<li>${i+1}. Pick up <strong>${names}</strong> <br><small class="text-muted">${stop.address}</small></li>`;
-                    });
-                    html += `</ul></div>`;
-                    list.innerHTML += html;
-
-                } else {
-                    list.innerHTML += `<div class="alert alert-danger">Error mapping ${d.name}: ${status}</div>`;
-                }
-            });
+                        renderDriverCard(d, color, response.routes[0].legs, waypoints, tHour, tMin);
+                    } else {
+                        // Fallback card without time calculation
+                        renderDriverCard(d, "#333", [], waypoints, tHour, tMin, true);
+                    }
+                });
+            } else {
+                // Offline/No-Map Mode
+                renderDriverCard(d, "#333", [], waypoints, tHour, tMin, true);
+            }
         });
         
         let leftoverCount = 0;
         leftoverStops.forEach(s => leftoverCount += s.passengers.length);
         if(leftoverCount > 0) list.innerHTML += `<div class="alert alert-warning">⚠️ ${leftoverCount} passengers could not fit!</div>`;
+    }
+
+    function renderDriverCard(d, color, legs, waypoints, tHour, tMin, isError=false) {
+        let depTimeStr = "--:--";
+        if(!isError) {
+            let totalSec = 0;
+            legs.forEach(leg => totalSec += leg.duration.value);
+            totalSec += (waypoints.length * 300); 
+            const target = new Date();
+            target.setHours(tHour, tMin, 0, 0);
+            const depDate = new Date(target.getTime() - (totalSec * 1000));
+            depTimeStr = depDate.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+        }
+
+        let html = `
+            <div class="card p-3 border-start border-5" style="border-color: ${color} !important;">
+                <div class="d-flex justify-content-between">
+                    <h5><span style="color:${color}">🚘</span> ${d.name} <span class="badge bg-secondary">${d.currentLoad}/${d.capacity}</span></h5>
+                    <div class="text-end">
+                        <span class="text-muted">Depart:</span><br>
+                        <span class="dep-time">${depTimeStr}</span>
+                    </div>
+                </div>
+                <hr>
+                <ul class="list-unstyled">
+        `;
+        
+        d.route.forEach((stop, i) => {
+            let names = stop.passengers.map(p => p.name).join(" & ");
+            html += `<li>${i+1}. Pick up <strong>${names}</strong> <br><small class="text-muted">${stop.address}</small></li>`;
+        });
+        html += `</ul></div>`;
+        document.getElementById('routes-list').innerHTML += html;
     }
 </script>
 
