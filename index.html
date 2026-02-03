@@ -23,6 +23,11 @@
         #map { height: 550px; width: 100%; border-radius: 12px; background-color: #e9ecef; }
         .inactive-row { opacity: 0.5; background-color: #f8f9fa; }
         .dep-time { font-size: 1.2rem; font-weight: bold; color: #d63384; }
+        
+        /* Search Bar Styling */
+        .search-container { position: relative; }
+        .search-icon { position: absolute; left: 15px; top: 10px; color: #aaa; }
+        .search-input { padding-left: 40px; border-radius: 20px; }
     </style>
 </head>
 <body>
@@ -44,9 +49,14 @@
 
     <div class="row">
         <div class="col-lg-5">
-            <div class="alert alert-light border shadow-sm d-flex justify-content-between align-items-center mb-3">
-                <span class="fw-bold text-primary">Admin Controls:</span>
-                <div>
+            
+            <div class="mb-3">
+                <div class="search-container mb-3">
+                    <span class="search-icon">🔍</span>
+                    <input type="text" id="search-box" class="form-control search-input" placeholder="Find name or address..." onkeyup="filterLists()">
+                </div>
+                
+                <div class="d-flex justify-content-between">
                     <button class="btn btn-sm btn-outline-primary" onclick="generateMagicLink()">🔗 Create Magic Link</button>
                     <button class="btn btn-sm btn-outline-danger" onclick="clearAllData()">🗑️ Reset</button>
                 </div>
@@ -208,15 +218,13 @@
         if(rawData) {
             try {
                 let jsonString;
-                
-                // 1. Try Decompressing (Short Links)
+                // Decompress / Decode Logic
                 const decompressed = LZString.decompressFromEncodedURIComponent(rawData);
                 
                 if (decompressed) {
                     jsonString = decompressed;
                 } else {
-                    // 2. Fallback to Base64 (Old Links)
-                    // Chrome Fix: Replace spaces with +
+                    // Fallback
                     if(rawData.includes(' ') && !rawData.includes('+')) {
                         rawData = rawData.replace(/ /g, '+');
                     }
@@ -231,7 +239,6 @@
                 localStorage.setItem('driversData', JSON.stringify(driversData));
                 localStorage.setItem('passengersData', JSON.stringify(passengersData));
                 
-                // Clean URL
                 window.history.replaceState({}, document.title, window.location.pathname);
             } catch(e) {
                 console.error("Link Error:", e);
@@ -285,7 +292,7 @@
         document.getElementById('addr-warning').innerHTML = '<span class="text-danger">⚠️ Unsaved changes. Please select from dropdown.</span>';
     }
 
-    // --- 4. LIST MANAGEMENT ---
+    // --- 4. LIST MANAGEMENT & SEARCH ---
     function renderLists() {
         const dList = document.getElementById('drivers-list-body');
         const pList = document.getElementById('passengers-list-body');
@@ -298,6 +305,22 @@
         
         localStorage.setItem('driversData', JSON.stringify(driversData));
         localStorage.setItem('passengersData', JSON.stringify(passengersData));
+        
+        // Re-apply filter if user is typing
+        filterLists();
+    }
+    
+    function filterLists() {
+        const term = document.getElementById('search-box').value.toLowerCase();
+        const rows = document.querySelectorAll('tbody tr'); // Get all rows
+        rows.forEach(row => {
+            const text = row.innerText.toLowerCase();
+            if (term === "") {
+                row.style.display = ""; // Show all
+            } else {
+                row.style.display = text.includes(term) ? "" : "none";
+            }
+        });
     }
 
     function createRow(item, idx, type) {
@@ -330,7 +353,6 @@
         renderLists();
     }
     
-    // NEW FUNCTION: Sets all to active (true) or inactive (false)
     function setAll(type, activeStatus) {
         if(type === 'driver') driversData.forEach(d => d.active = activeStatus);
         else passengersData.forEach(p => p.active = activeStatus);
@@ -418,10 +440,7 @@
         try {
             const payload = { d: driversData, p: passengersData };
             const jsonString = JSON.stringify(payload);
-            
-            // USE LZSTRING COMPRESSION (Short & Safe)
             const compressed = LZString.compressToEncodedURIComponent(jsonString);
-            
             const baseURL = window.location.origin + window.location.pathname;
             const magicLink = `${baseURL}?data=${compressed}`;
             
