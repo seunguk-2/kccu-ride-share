@@ -175,8 +175,49 @@
     // --- 2. DATA LOADING (MAGIC LINK LOGIC) ---
     // Check if URL has data= param
     // --- 2. DATA LOADING (MAGIC LINK LOGIC) ---
+    // --- 2. DATA LOADING (MAGIC LINK LOGIC) ---
     const urlParams = new URLSearchParams(window.location.search);
-    const rawData = urlParams.get('data');
+    let rawData = urlParams.get('data');
+
+    let driversData = [];
+    let passengersData = [];
+
+    if(rawData) {
+        try {
+            // FIX 1: Chrome turns '+' into spaces. We must turn them back to '+' for Base64 to work.
+            let cleanBase64 = rawData.replace(/ /g, '+');
+            
+            // FIX 2: Handle cases where the link might be double-encoded or raw
+            // We try to decode URI components, but if it fails (because it's already raw), we ignore the error.
+            try {
+                cleanBase64 = decodeURIComponent(cleanBase64);
+            } catch(e) {
+                // It wasn't encoded, so we use the string as-is.
+            }
+
+            // Decode Base64 to JSON
+            const jsonString = atob(cleanBase64);
+            const decoded = JSON.parse(jsonString);
+            
+            driversData = decoded.d || [];
+            passengersData = decoded.p || [];
+            
+            // Save to local storage
+            localStorage.setItem('driversData', JSON.stringify(driversData));
+            localStorage.setItem('passengersData', JSON.stringify(passengersData));
+            
+            // Clean URL
+            window.history.replaceState({}, document.title, window.location.pathname);
+            alert("✅ Configuration loaded from Link!");
+        } catch(e) {
+            console.error(e);
+            alert("❌ Link Broken: " + e.message + "\n\nTry re-generating the link from the source computer.");
+        }
+    } else {
+        // Load from Local Storage normally
+        driversData = JSON.parse(localStorage.getItem('driversData')) || [];
+        passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
+    }
 
     let driversData = [];
     let passengersData = [];
