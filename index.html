@@ -371,30 +371,52 @@
 
     // --- 6. SHARING UTILS ---
     
-        function generateMagicLink() {
-                // 1. Create the data payload
-                const payload = {
-                    d: driversData,
-                    p: passengersData
-                };
-                const jsonString = JSON.stringify(payload);
-                
-                // 2. Encode to Base64
-                const base64 = btoa(jsonString);
-                
-                // 3. CRITICAL FIX: Encode special chars for Safari/iOS
-                // This turns "+" into "%2B", "/" into "%2F", etc. so the browser doesn't break.
-                const safeEncoded = encodeURIComponent(base64);
-                
-                const baseURL = window.location.origin + window.location.pathname;
-                const magicLink = `${baseURL}?data=${safeEncoded}`;
-                
-                // 4. Show it
-                document.getElementById('share-text-area').value = magicLink;
-                navigator.clipboard.writeText(magicLink);
-                document.querySelector('#shareModal .alert').innerText = "Link copied! Send this to your group.";
-                shareModal.show();
-            }
+    function generateMagicLink() {
+        // 1. Prepare Data
+        const payload = {
+            d: driversData,
+            p: passengersData
+        };
+        const jsonString = JSON.stringify(payload);
+        const base64 = btoa(jsonString);
+        
+        // SAFARI FIX: Use encodeURIComponent to handle special characters
+        const safeEncoded = encodeURIComponent(base64);
+        
+        const baseURL = window.location.origin + window.location.pathname;
+        const magicLink = `${baseURL}?data=${safeEncoded}`;
+        
+        // 2. Populate the box
+        const textArea = document.getElementById('share-text-area');
+        textArea.value = magicLink;
+        
+        // 3. Show the Modal FIRST (Crucial: Can't copy from a hidden box)
+        shareModal.show();
+
+        // 4. Wait for modal to appear, then try to copy
+        setTimeout(() => {
+            textArea.focus();
+            textArea.select();
+            textArea.setSelectionRange(0, 99999); // For mobile devices
+
+            // Try Modern Copy
+            navigator.clipboard.writeText(magicLink).then(() => {
+                document.querySelector('#shareModal .alert').innerText = "✅ Link copied to clipboard!";
+                document.querySelector('#shareModal .alert').className = "alert alert-success mt-2 mb-0";
+            }).catch(() => {
+                // Fallback: Old School Copy
+                try {
+                    document.execCommand('copy');
+                    document.querySelector('#shareModal .alert').innerText = "✅ Link copied to clipboard!";
+                    document.querySelector('#shareModal .alert').className = "alert alert-success mt-2 mb-0";
+                } catch (e) {
+                    // Final Fail: Ask user to copy manually
+                    document.querySelector('#shareModal .alert').innerText = "⚠️ Auto-copy failed. Please copy the text below manually.";
+                    document.querySelector('#shareModal .alert').className = "alert alert-warning mt-2 mb-0";
+                }
+            });
+        }, 500); // Small delay to ensure modal is visible
+    }
 
     function generateShareText() {
         if(!lastCalculatedDrivers.length) return alert("Please generate a schedule first!");
