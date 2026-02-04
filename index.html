@@ -95,6 +95,14 @@
             </div>
 
             <div class="d-grid gap-2">
+                <div class="input-group">
+                    <span class="input-group-text">Strategy:</span>
+                    <select id="optimize-mode" class="form-select fw-bold">
+                        <option value="time">⏱️ Fastest Time (Google)</option>
+                        <option value="distance">📏 Shortest Distance (Greedy)</option>
+                    </select>
+                </div>
+
                 <button class="btn btn-success py-3 fw-bold shadow-sm" onclick="calculateSmartRoutes()">
                     ⚡ Generate Optimized Routes
                 </button>
@@ -218,13 +226,11 @@
         if(rawData) {
             try {
                 let jsonString;
-                // Decompress / Decode Logic
                 const decompressed = LZString.decompressFromEncodedURIComponent(rawData);
                 
                 if (decompressed) {
                     jsonString = decompressed;
                 } else {
-                    // Fallback
                     if(rawData.includes(' ') && !rawData.includes('+')) {
                         rawData = rawData.replace(/ /g, '+');
                     }
@@ -238,14 +244,12 @@
                 
                 localStorage.setItem('driversData', JSON.stringify(driversData));
                 localStorage.setItem('passengersData', JSON.stringify(passengersData));
-                
                 window.history.replaceState({}, document.title, window.location.pathname);
             } catch(e) {
                 console.error("Link Error:", e);
                 const errBox = document.getElementById('error-container');
                 errBox.innerText = "⚠️ Link Corrupted. Loaded local backup.";
                 errBox.classList.remove('d-none');
-                
                 driversData = JSON.parse(localStorage.getItem('driversData')) || [];
                 passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
             }
@@ -306,20 +310,15 @@
         localStorage.setItem('driversData', JSON.stringify(driversData));
         localStorage.setItem('passengersData', JSON.stringify(passengersData));
         
-        // Re-apply filter if user is typing
         filterLists();
     }
     
     function filterLists() {
         const term = document.getElementById('search-box').value.toLowerCase();
-        const rows = document.querySelectorAll('tbody tr'); // Get all rows
+        const rows = document.querySelectorAll('tbody tr');
         rows.forEach(row => {
             const text = row.innerText.toLowerCase();
-            if (term === "") {
-                row.style.display = ""; // Show all
-            } else {
-                row.style.display = text.includes(term) ? "" : "none";
-            }
+            row.style.display = (term === "" || text.includes(term)) ? "" : "none";
         });
     }
 
@@ -458,7 +457,6 @@
                      document.querySelector('#shareModal .alert').innerText = "⚠️ Auto-copy failed. Copy manually.";
                 });
             }, 500);
-
         } catch (e) {
             alert("Crash during link generation: " + e.message);
         }
@@ -521,6 +519,8 @@
 
     function calculateSmartRoutes() {
         const timeInput = document.getElementById('target-time').value;
+        const mode = document.getElementById('optimize-mode').value; // 'time' or 'distance'
+        
         if(!timeInput) return alert("Set arrival time.");
 
         if(window.google) {
@@ -553,7 +553,6 @@
             }
             stops.push(stop);
         }
-        
         stops.sort((a, b) => b.passengers.length - a.passengers.length);
 
         // 2. Assign Groups to Drivers
@@ -564,7 +563,6 @@
             let minDistance = Infinity;
 
             let eligibleDrivers = drivers.filter(d => (d.capacity - d.currentLoad) >= groupSize);
-            
             if (eligibleDrivers.length === 0) {
                 eligibleDrivers = drivers.filter(d => (d.capacity - d.currentLoad) > 0);
             }
@@ -601,11 +599,39 @@
             }
         }
 
+        // 3. POST-PROCESSING: Reorder route if "Distance" mode is selected
+        if(mode === 'distance') {
+            drivers.forEach(d => {
+                if(d.route.length > 1) {
+                    // Greedy Sort: Reorder stops based on nearest neighbor logic
+                    let sortedRoute = [];
+                    let currentPos = { lat: d.lat, lng: d.lng }; // Driver Start
+                    let remaining = [...d.route];
+
+                    while(remaining.length > 0) {
+                        let closestIdx = 0;
+                        let minD = Infinity;
+                        for(let i=0; i<remaining.length; i++) {
+                            let dist = getDistance(currentPos, remaining[i]);
+                            if(dist < minD) {
+                                minD = dist;
+                                closestIdx = i;
+                            }
+                        }
+                        let nextStop = remaining.splice(closestIdx, 1)[0];
+                        sortedRoute.push(nextStop);
+                        currentPos = { lat: nextStop.lat, lng: nextStop.lng };
+                    }
+                    d.route = sortedRoute;
+                }
+            });
+        }
+
         lastCalculatedDrivers = drivers;
-        displayResults(drivers, stops, timeInput);
+        displayResults(drivers, stops, timeInput, mode);
     }
 
-    function displayResults(drivers, leftoverStops, timeInput) {
+    function displayResults(drivers, leftoverStops, timeInput, mode) {
         const [tHour, tMin] = timeInput.split(':').map(Number);
         const list = document.getElementById('routes-list');
         document.getElementById('results-area').style.display = 'block';
@@ -613,19 +639,21 @@
 
         const bounds = window.google ? new google.maps.LatLngBounds() : null;
         const colors = ["#0000FF", "#FF0000", "#008000", "#FFA500", "#800080", "#008080"];
+        
+        // Determine Google Optimization Setting
+        const optimizeGoogle = (mode === 'time'); // True if Time, False if Distance
 
         drivers.forEach((d, dIdx) => {
             if(d.route.length === 0) return;
 
             const waypoints = d.route.map(stop => ({ location: stop.address, stopover: true }));
             
-            // Only use Map API if available
             if(window.google) {
                 directionsService.route({
                     origin: d.address,
                     destination: CHURCH_LOCATION.address,
                     waypoints: waypoints,
-                    optimizeWaypoints: true,
+                    optimizeWaypoints: optimizeGoogle, // Use the dropdown selection here
                     travelMode: google.maps.TravelMode.DRIVING
                 }, (response, status) => {
                     if (status === "OK") {
@@ -639,7 +667,7 @@
                         response.routes[0].bounds && bounds.union(response.routes[0].bounds);
                         map.fitBounds(bounds);
 
-                        renderDriverCard(d, color, response.routes[0].legs, waypoints, tHour, tMin);
+                        renderDriverCard(d, color, response.routes[0].legs, waypoints, tHour, tMin, false, response.routes[0].waypoint_order);
                     } else {
                         renderDriverCard(d, "#333", [], waypoints, tHour, tMin, true);
                     }
@@ -654,7 +682,7 @@
         if(leftoverCount > 0) list.innerHTML += `<div class="alert alert-warning">⚠️ ${leftoverCount} passengers could not fit!</div>`;
     }
 
-    function renderDriverCard(d, color, legs, waypoints, tHour, tMin, isError=false) {
+    function renderDriverCard(d, color, legs, waypoints, tHour, tMin, isError=false, order=[]) {
         let depTimeStr = "--:--";
         if(!isError) {
             let totalSec = 0;
@@ -679,7 +707,14 @@
                 <ul class="list-unstyled">
         `;
         
-        d.route.forEach((stop, i) => {
+        // If Google Optimized the order, we need to display in THAT order.
+        // If 'order' is empty (or Distance Mode), we assume 0,1,2,3...
+        if(!order || order.length === 0) {
+            order = d.route.map((_, i) => i);
+        }
+
+        order.forEach((idx, i) => {
+            let stop = d.route[idx];
             let names = stop.passengers.map(p => p.name).join(" & ");
             html += `<li>${i+1}. Pick up <strong>${names}</strong> <br><small class="text-muted">${stop.address}</small></li>`;
         });
