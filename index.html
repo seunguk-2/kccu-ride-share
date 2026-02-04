@@ -24,7 +24,6 @@
         .inactive-row { opacity: 0.5; background-color: #f8f9fa; }
         .dep-time { font-size: 1.2rem; font-weight: bold; color: #d63384; }
         
-        /* Search Bar Styling */
         .search-container { position: relative; }
         .search-icon { position: absolute; left: 15px; top: 10px; color: #aaa; }
         .search-input { padding-left: 40px; border-radius: 20px; }
@@ -95,12 +94,22 @@
             </div>
 
             <div class="d-grid gap-2">
-                <div class="input-group">
-                    <span class="input-group-text">Strategy:</span>
-                    <select id="optimize-mode" class="form-select fw-bold">
-                        <option value="time">⏱️ Fastest Time (Google)</option>
-                        <option value="distance">📏 Shortest Distance (Greedy)</option>
-                    </select>
+                <div class="row g-2">
+                    <div class="col-8">
+                        <div class="input-group">
+                            <span class="input-group-text">Mode</span>
+                            <select id="optimize-mode" class="form-select fw-bold">
+                                <option value="time">⏱️ Fastest (Google)</option>
+                                <option value="distance">📏 Shortest (Greedy)</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="col-4">
+                        <div class="input-group" title="Seconds allowed per stop">
+                            <span class="input-group-text">⏳</span>
+                            <input type="number" id="stop-duration" class="form-control text-center fw-bold" value="30" min="0">
+                        </div>
+                    </div>
                 </div>
 
                 <button class="btn btn-success py-3 fw-bold shadow-sm" onclick="calculateSmartRoutes()">
@@ -309,7 +318,6 @@
         
         localStorage.setItem('driversData', JSON.stringify(driversData));
         localStorage.setItem('passengersData', JSON.stringify(passengersData));
-        
         filterLists();
     }
     
@@ -519,7 +527,9 @@
 
     function calculateSmartRoutes() {
         const timeInput = document.getElementById('target-time').value;
-        const mode = document.getElementById('optimize-mode').value; // 'time' or 'distance'
+        const mode = document.getElementById('optimize-mode').value;
+        // User-Configurable Stop Time (Default 30s)
+        const stopDuration = parseInt(document.getElementById('stop-duration').value) || 30;
         
         if(!timeInput) return alert("Set arrival time.");
 
@@ -599,13 +609,12 @@
             }
         }
 
-        // 3. POST-PROCESSING: Reorder route if "Distance" mode is selected
+        // 3. POST-PROCESSING (Greedy Sort for Distance Mode)
         if(mode === 'distance') {
             drivers.forEach(d => {
                 if(d.route.length > 1) {
-                    // Greedy Sort: Reorder stops based on nearest neighbor logic
                     let sortedRoute = [];
-                    let currentPos = { lat: d.lat, lng: d.lng }; // Driver Start
+                    let currentPos = { lat: d.lat, lng: d.lng };
                     let remaining = [...d.route];
 
                     while(remaining.length > 0) {
@@ -613,10 +622,7 @@
                         let minD = Infinity;
                         for(let i=0; i<remaining.length; i++) {
                             let dist = getDistance(currentPos, remaining[i]);
-                            if(dist < minD) {
-                                minD = dist;
-                                closestIdx = i;
-                            }
+                            if(dist < minD) { minD = dist; closestIdx = i; }
                         }
                         let nextStop = remaining.splice(closestIdx, 1)[0];
                         sortedRoute.push(nextStop);
@@ -628,10 +634,10 @@
         }
 
         lastCalculatedDrivers = drivers;
-        displayResults(drivers, stops, timeInput, mode);
+        displayResults(drivers, stops, timeInput, mode, stopDuration);
     }
 
-    function displayResults(drivers, leftoverStops, timeInput, mode) {
+    function displayResults(drivers, leftoverStops, timeInput, mode, stopDuration) {
         const [tHour, tMin] = timeInput.split(':').map(Number);
         const list = document.getElementById('routes-list');
         document.getElementById('results-area').style.display = 'block';
@@ -640,8 +646,7 @@
         const bounds = window.google ? new google.maps.LatLngBounds() : null;
         const colors = ["#0000FF", "#FF0000", "#008000", "#FFA500", "#800080", "#008080"];
         
-        // Determine Google Optimization Setting
-        const optimizeGoogle = (mode === 'time'); // True if Time, False if Distance
+        const optimizeGoogle = (mode === 'time'); 
 
         drivers.forEach((d, dIdx) => {
             if(d.route.length === 0) return;
@@ -653,7 +658,7 @@
                     origin: d.address,
                     destination: CHURCH_LOCATION.address,
                     waypoints: waypoints,
-                    optimizeWaypoints: optimizeGoogle, // Use the dropdown selection here
+                    optimizeWaypoints: optimizeGoogle,
                     travelMode: google.maps.TravelMode.DRIVING
                 }, (response, status) => {
                     if (status === "OK") {
@@ -667,13 +672,13 @@
                         response.routes[0].bounds && bounds.union(response.routes[0].bounds);
                         map.fitBounds(bounds);
 
-                        renderDriverCard(d, color, response.routes[0].legs, waypoints, tHour, tMin, false, response.routes[0].waypoint_order);
+                        renderDriverCard(d, color, response.routes[0].legs, waypoints, tHour, tMin, false, response.routes[0].waypoint_order, stopDuration);
                     } else {
-                        renderDriverCard(d, "#333", [], waypoints, tHour, tMin, true);
+                        renderDriverCard(d, "#333", [], waypoints, tHour, tMin, true, [], stopDuration);
                     }
                 });
             } else {
-                renderDriverCard(d, "#333", [], waypoints, tHour, tMin, true);
+                renderDriverCard(d, "#333", [], waypoints, tHour, tMin, true, [], stopDuration);
             }
         });
         
@@ -682,12 +687,14 @@
         if(leftoverCount > 0) list.innerHTML += `<div class="alert alert-warning">⚠️ ${leftoverCount} passengers could not fit!</div>`;
     }
 
-    function renderDriverCard(d, color, legs, waypoints, tHour, tMin, isError=false, order=[]) {
+    function renderDriverCard(d, color, legs, waypoints, tHour, tMin, isError=false, order=[], stopDuration=30) {
         let depTimeStr = "--:--";
         if(!isError) {
             let totalSec = 0;
             legs.forEach(leg => totalSec += leg.duration.value);
-            totalSec += (waypoints.length * 300); 
+            // Apply User-Defined Stop Duration here
+            totalSec += (waypoints.length * stopDuration); 
+            
             const target = new Date();
             target.setHours(tHour, tMin, 0, 0);
             const depDate = new Date(target.getTime() - (totalSec * 1000));
@@ -707,8 +714,6 @@
                 <ul class="list-unstyled">
         `;
         
-        // If Google Optimized the order, we need to display in THAT order.
-        // If 'order' is empty (or Distance Mode), we assume 0,1,2,3...
         if(!order || order.length === 0) {
             order = d.route.map((_, i) => i);
         }
