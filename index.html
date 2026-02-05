@@ -94,7 +94,7 @@
                         <div class="input-group">
                             <span class="input-group-text">Mode</span>
                             <select id="optimize-mode" class="form-select fw-bold">
-                                <option value="distance">📏 Min Distance (Seeded)</option>
+                                <option value="distance">📏 Longest Route First (Balanced)</option>
                                 <option value="time">⏱️ Fastest Time (Google)</option>
                             </select>
                         </div>
@@ -463,7 +463,7 @@
         debugModal.show();
     }
 
-    // --- ALGORITHM: SEED & GROW (Strict Phases) ---
+    // --- ALGORITHM: SEED & GROW (Priority to Longest Distance) ---
     function calculateSmartRoutes() {
         const timeInput = document.getElementById('target-time').value;
         const mode = document.getElementById('optimize-mode').value; 
@@ -472,7 +472,8 @@
         if(!timeInput) return alert("Set arrival time.");
         if(window.google) { routeRenderers.forEach(r => r.setMap(null)); routeRenderers = []; }
 
-        let drivers = driversData.filter(d => d.active).map(d => ({ ...d, route: [], currentLoad: 0, currentLat: d.lat, currentLng: d.lng }));
+        // Drivers carry 'totalDist' to track accumulated trip length
+        let drivers = driversData.filter(d => d.active).map(d => ({ ...d, route: [], currentLoad: 0, currentLat: d.lat, currentLng: d.lng, totalDist: 0 }));
         let rawPassengers = passengersData.filter(p => p.active).map(p => ({...p}));
 
         if(drivers.length === 0 || rawPassengers.length === 0) return alert("Need active drivers and passengers.");
@@ -492,13 +493,12 @@
             stops.push(stop);
         }
 
-        // 2. PHASE 1: SEEDING
-        // For every empty driver, find their SINGLE nearest stop.
-        // Sort all potential (Driver, Stop) pairs by distance to ensure global optimality.
+        // 2. PHASE 1: SEEDING (Each driver claims NEAREST stop)
         let seedPairs = [];
         drivers.forEach((d, dIdx) => {
             stops.forEach((s, sIdx) => {
-                if (d.capacity >= s.passengers.length) { // Strict Capacity Check
+                // Capacity Constraint (Strict: No Split)
+                if (d.capacity >= s.passengers.length) {
                     seedPairs.push({
                         dist: getDistance({lat: d.lat, lng: d.lng}, s),
                         dIdx: dIdx,
@@ -509,7 +509,7 @@
         });
         seedPairs.sort((a, b) => a.dist - b.dist);
 
-        // Assign Seeds (1 per driver max)
+        // Assign Seeds
         seedPairs.forEach(pair => {
             let d = drivers[pair.dIdx];
             let stop = stops[pair.sIdx];
@@ -519,53 +519,59 @@
                 d.currentLoad += stop.passengers.length;
                 d.currentLat = stop.lat;
                 d.currentLng = stop.lng;
+                d.totalDist += pair.dist; // Track Distance
             }
         });
 
-        // 3. PHASE 2: EXPANSION (CHAINING)
-        // Drivers now look for the next nearest stop from their CURRENT location
+        // 3. PHASE 2: EXPANSION (Priority to Driver with Longest Distance)
         let active = true;
         while(active) {
             active = false;
-            let bestMove = null;
-            let minDist = Infinity;
+            
+            // SORT drivers: Longest Distance First
+            // We clone array reference to sort without losing data
+            let activeDrivers = drivers.filter(d => (d.capacity - d.currentLoad) > 0);
+            activeDrivers.sort((a, b) => b.totalDist - a.totalDist);
 
-            // Iterate over all drivers who have space
-            drivers.forEach(d => {
+            // Give priority to the "Longest Hauler"
+            for(let d of activeDrivers) {
+                let bestStop = null;
+                let minDist = Infinity;
+
+                // Find nearest unassigned stop for THIS driver
                 let seatsLeft = d.capacity - d.currentLoad;
-                if (seatsLeft > 0) {
-                    stops.forEach((stop, sIdx) => {
-                        if (!stop.assigned && seatsLeft >= stop.passengers.length) {
-                            // Distance from driver's LAST STOP (currentLat)
-                            let dist = getDistance({lat: d.currentLat, lng: d.currentLng}, stop);
-                            if (dist < minDist) {
-                                minDist = dist;
-                                bestMove = { driver: d, stop: stop };
-                            }
+                stops.forEach(stop => {
+                    if(!stop.assigned && seatsLeft >= stop.passengers.length) {
+                        let dist = getDistance({lat: d.currentLat, lng: d.currentLng}, stop);
+                        if(dist < minDist) {
+                            minDist = dist;
+                            bestStop = stop;
                         }
-                    });
-                }
-            });
+                    }
+                });
 
-            if (bestMove) {
-                bestMove.stop.assigned = true;
-                bestMove.driver.route.push(bestMove.stop);
-                bestMove.driver.currentLoad += bestMove.stop.passengers.length;
-                bestMove.driver.currentLat = bestMove.stop.lat;
-                bestMove.driver.currentLng = bestMove.stop.lng;
-                active = true; // Continue until no one can move
+                if(bestStop) {
+                    bestStop.assigned = true;
+                    d.route.push(bestStop);
+                    d.currentLoad += bestStop.passengers.length;
+                    d.currentLat = bestStop.lat;
+                    d.currentLng = bestStop.lng;
+                    d.totalDist += minDist;
+                    active = true; // Something happened, so we loop again to re-sort priorities
+                    break; // Break the inner loop so we re-sort drivers immediately
+                }
             }
         }
 
         // 4. Collect Unassigned
         let leftoverStops = stops.filter(s => !s.assigned);
 
-        // 5. Post-Process (Distance Mode Only)
+        // 5. Post-Process (Distance Mode Only - Reorder for optimality)
         if(mode === 'distance') {
             drivers.forEach(d => {
                 if(d.route.length > 1) {
                     let sorted = [];
-                    let curr = { lat: d.lat, lng: d.lng }; // Start from Home
+                    let curr = { lat: d.lat, lng: d.lng };
                     let rem = [...d.route];
                     while(rem.length > 0) {
                         let closestIdx = 0;
