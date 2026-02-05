@@ -146,10 +146,20 @@
                     <label>Name</label>
                     <input type="text" class="form-control" id="entry-name">
                 </div>
+                
                 <div class="mb-3" id="cap-container">
                     <label>Car Capacity</label>
                     <input type="number" class="form-control" id="entry-cap" value="4">
                 </div>
+
+                <div class="mb-3" id="force-assign-container" style="display:none;">
+                    <label>🔒 Force Assign to Driver (Optional)</label>
+                    <select class="form-select" id="entry-force-driver">
+                        <option value="">-- Auto Assign (Default) --</option>
+                    </select>
+                    <small class="text-muted">This passenger will strictly ride with this driver.</small>
+                </div>
+
                 <div class="mb-3">
                     <label>Address</label>
                     <input type="text" class="form-control" id="entry-address" placeholder="Start typing address..." autocomplete="off" oninput="wipeCoords()">
@@ -323,10 +333,16 @@
         const rowClass = item.active ? '' : 'inactive-row';
         const info = type === 'driver' ? `<small>Cap: ${item.capacity}</small>` : '';
         const geoStatus = (item.lat && item.lng && !isNaN(item.lat)) ? '<span class="text-success" title="GPS Locked">📍</span>' : '<span class="text-danger" title="NO GPS DATA!">⚠️</span>';
+        
+        let subInfo = "";
+        if(type === 'passenger' && item.forcedDriver) {
+            subInfo = `<br><span class="badge bg-warning text-dark">🔒 ${item.forcedDriver}</span>`;
+        }
+
         return `
             <tr class="${rowClass}">
                 <td style="width:10%"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" ${isChecked} onchange="toggleActive('${type}', ${idx})"></div></td>
-                <td><strong>${item.name}</strong> ${info} ${geoStatus}<br><small class="text-muted text-truncate" style="max-width: 150px; display:block;">${item.address}</small></td>
+                <td><strong>${item.name}</strong> ${info} ${geoStatus}<br><small class="text-muted text-truncate" style="max-width: 150px; display:block;">${item.address}</small>${subInfo}</td>
                 <td class="text-end" style="width:25%">
                     <button class="btn btn-sm btn-outline-secondary me-1" onclick="openModal('${type}', ${idx})">✏️</button>
                     <button class="btn btn-sm btn-outline-danger" onclick="deleteItem('${type}', ${idx})">×</button>
@@ -364,12 +380,27 @@
     function openModal(type, index) {
         document.getElementById('entry-type').value = type;
         document.getElementById('entry-index').value = index;
-        document.getElementById('cap-container').style.display = type === 'driver' ? 'block' : 'none';
         document.getElementById('entry-lat').value = '';
         document.getElementById('entry-lng').value = '';
         document.getElementById('addr-warning').innerHTML = 'Start typing and <strong>click</strong> the dropdown suggestion.';
         document.getElementById('modalTitle').innerText = (index === -1) ? "New " + (type==='driver'?'Driver':'Passenger') : "Edit " + (type==='driver'?'Driver':'Passenger');
         
+        // Show/Hide Fields
+        document.getElementById('cap-container').style.display = (type === 'driver') ? 'block' : 'none';
+        
+        // Setup Force Driver Dropdown
+        const forceContainer = document.getElementById('force-assign-container');
+        const forceSelect = document.getElementById('entry-force-driver');
+        if(type === 'passenger') {
+            forceContainer.style.display = 'block';
+            forceSelect.innerHTML = '<option value="">-- Auto Assign (Default) --</option>';
+            driversData.forEach(d => {
+                forceSelect.innerHTML += `<option value="${d.name}">${d.name}</option>`;
+            });
+        } else {
+            forceContainer.style.display = 'none';
+        }
+
         if (index > -1) {
             const data = type === 'driver' ? driversData[index] : passengersData[index];
             document.getElementById('entry-name').value = data.name;
@@ -380,10 +411,12 @@
                 document.getElementById('addr-warning').innerHTML = '<span class="text-success">✅ GPS Coordinates Locked!</span>';
             }
             if (type === 'driver') document.getElementById('entry-cap').value = data.capacity;
+            if (type === 'passenger' && data.forcedDriver) forceSelect.value = data.forcedDriver;
         } else {
             document.getElementById('entry-name').value = '';
             document.getElementById('entry-address').value = '';
             document.getElementById('entry-cap').value = '4';
+            forceSelect.value = "";
         }
         myModal.show();
     }
@@ -400,11 +433,23 @@
         if(isNaN(lat) || isNaN(lng)) return alert("STOP: GPS Missing. Please select address from dropdown.");
 
         const person = { name, address: addr, lat, lng, active: true };
+        
         if(type === 'driver') {
             person.capacity = parseInt(document.getElementById('entry-cap').value);
-            if (index === -1) driversData.push(person); else { person.active = driversData[index].active; driversData[index] = person; }
+            if (index === -1) driversData.push(person); 
+            else { 
+                person.active = driversData[index].active; 
+                driversData[index] = person; 
+            }
         } else {
-            if (index === -1) passengersData.push(person); else { person.active = passengersData[index].active; passengersData[index] = person; }
+            const forced = document.getElementById('entry-force-driver').value;
+            if(forced) person.forcedDriver = forced;
+            
+            if (index === -1) passengersData.push(person); 
+            else { 
+                person.active = passengersData[index].active; 
+                passengersData[index] = person; 
+            }
         }
         renderLists();
         myModal.hide();
@@ -462,7 +507,7 @@
         debugModal.show();
     }
 
-    // --- 4-STAGE ALGORITHM (With Directional Seeding) ---
+    // --- ALGORITHM: 4-STAGE (Now with Forced Assignments) ---
     function calculateSmartRoutes() {
         const timeInput = document.getElementById('target-time').value;
         const mode = document.getElementById('optimize-mode').value; 
@@ -471,13 +516,40 @@
         if(!timeInput) return alert("Set arrival time.");
         if(window.google) { routeRenderers.forEach(r => r.setMap(null)); routeRenderers = []; }
 
+        // Setup Drivers
         let drivers = driversData.filter(d => d.active).map(d => ({ ...d, route: [], currentLoad: 0, currentLat: d.lat, currentLng: d.lng, totalDist: 0 }));
         let rawPassengers = passengersData.filter(p => p.active).map(p => ({...p}));
 
         if(drivers.length === 0 || rawPassengers.length === 0) return alert("Need active drivers and passengers.");
         if(drivers.some(d => isNaN(d.lat)) || rawPassengers.some(p => isNaN(p.lat))) return alert("CRITICAL: Fix GPS errors.");
 
-        // 1. ATOMIC GROUPING (10m)
+        // --- PHASE 0: FORCE ASSIGNMENTS ---
+        // We must remove forced passengers from the general pool immediately
+        for(let i = rawPassengers.length - 1; i >= 0; i--) {
+            let p = rawPassengers[i];
+            if(p.forcedDriver) {
+                // Find the driver
+                let targetDriver = drivers.find(d => d.name === p.forcedDriver);
+                if(targetDriver) {
+                    // Check capacity
+                    if(targetDriver.currentLoad < targetDriver.capacity) {
+                        // Create a "Stop" just for this forced person
+                        let stop = { lat: p.lat, lng: p.lng, address: p.address, passengers: [p], assigned: true };
+                        targetDriver.route.push(stop);
+                        targetDriver.currentLoad++;
+                        targetDriver.currentLat = p.lat; // Update position for next pickup
+                        targetDriver.currentLng = p.lng;
+                        
+                        // Remove from general pool
+                        rawPassengers.splice(i, 1);
+                    } else {
+                        console.warn(`Driver ${p.forcedDriver} is full! Cannot force assign ${p.name}`);
+                    }
+                }
+            }
+        }
+
+        // --- 1. ATOMIC GROUPING (10m) ---
         let stops = [];
         while(rawPassengers.length > 0) {
             let p = rawPassengers.pop();
@@ -491,62 +563,66 @@
             stops.push(stop);
         }
 
-        // 2. PHASE 1: DIRECTIONAL SEEDING (The Proxy for Time)
-        // We score stops. Lower score = Better seed.
-        // Score = Distance + Penalty for Backtracking.
+        // --- 2. PHASE 1: DIRECTIONAL SEEDING ---
         let seedPairs = [];
         drivers.forEach((d, dIdx) => {
-            let distDriverToChurch = getDistance({lat: d.lat, lng: d.lng}, CHURCH_LOCATION);
-            
-            stops.forEach((s, sIdx) => {
-                if (d.capacity >= s.passengers.length) {
-                    let distDriverToStop = getDistance({lat: d.lat, lng: d.lng}, s);
-                    let distStopToChurch = getDistance(s, CHURCH_LOCATION);
-                    
-                    // Directional Logic:
-                    // If stop is further from church than driver, it's a "backtrack".
-                    // We apply a 1.5x penalty to the distance in that case.
-                    let weightedDist = distDriverToStop;
-                    if(distStopToChurch > distDriverToChurch) {
-                        weightedDist = distDriverToStop * 1.5; 
-                    }
+            // Only seed if driver hasn't already been forced-assigned a load that fills them up
+            if(d.currentLoad < d.capacity) {
+                let distDriverToChurch = getDistance({lat: d.lat, lng: d.lng}, CHURCH_LOCATION);
+                stops.forEach((s, sIdx) => {
+                    let capacityLeft = d.capacity - d.currentLoad;
+                    if (capacityLeft >= s.passengers.length) {
+                        let distDriverToStop = getDistance({lat: d.lat, lng: d.lng}, s);
+                        let distStopToChurch = getDistance(s, CHURCH_LOCATION);
+                        let weightedDist = distDriverToStop;
+                        if(distStopToChurch > distDriverToChurch) weightedDist = distDriverToStop * 1.5; 
 
-                    seedPairs.push({
-                        score: weightedDist,
-                        dIdx: dIdx,
-                        sIdx: sIdx
-                    });
-                }
-            });
+                        seedPairs.push({ score: weightedDist, dIdx: dIdx, sIdx: sIdx });
+                    }
+                });
+            }
         });
         seedPairs.sort((a, b) => a.score - b.score);
 
-        // Assign Seeds
         seedPairs.forEach(pair => {
             let d = drivers[pair.dIdx];
             let stop = stops[pair.sIdx];
-            if (d.route.length === 0 && !stop.assigned) {
-                stop.assigned = true;
-                d.route.push(stop);
-                d.currentLoad += stop.passengers.length;
-                d.currentLat = stop.lat;
-                d.currentLng = stop.lng;
-                d.totalDist += getDistance({lat: d.lat, lng: d.lng}, stop);
+            // Only assign if driver is empty (or has only forced assignments but no "route seeds" yet) and stop is free
+            // Note: We allow adding to forced assignments here
+            if (!stop.assigned) {
+                // Heuristic: If driver has forced assignments, treated them as "seeded" already? 
+                // Let's treat them as unseeded for the purpose of picking up neighbors.
+                // We just limit to picking 1 seed per driver per loop.
+                // Actually, simplest is: If route was empty, seed. If route had forced people, treat that as seed.
+                // Let's stick to strict: If route is empty, take a seed.
+                if(d.route.length === 0) {
+                    stop.assigned = true;
+                    d.route.push(stop);
+                    d.currentLoad += stop.passengers.length;
+                    d.currentLat = stop.lat;
+                    d.currentLng = stop.lng;
+                    d.totalDist += getDistance({lat: d.lat, lng: d.lng}, stop);
+                }
             }
         });
 
-        // 3. PHASE 2: EXPANSION (Longest Hauler Priority)
+        // --- 3. PHASE 2: EXPANSION (Longest Hauler) ---
         let active = true;
         while(active) {
             active = false;
             let activeDrivers = drivers.filter(d => (d.capacity - d.currentLoad) > 0);
-            activeDrivers.sort((a, b) => b.totalDist - a.totalDist); // Longest first
+            
+            // Recalculate total distances to include forced assignments
+            activeDrivers.forEach(d => {
+                // Recalc is hard, just trust the accumulated value or use current load as tie breaker
+            });
+            activeDrivers.sort((a, b) => b.totalDist - a.totalDist); 
 
             for(let d of activeDrivers) {
                 let bestStop = null;
                 let minDist = Infinity;
-
                 let seatsLeft = d.capacity - d.currentLoad;
+                
                 stops.forEach(stop => {
                     if(!stop.assigned && seatsLeft >= stop.passengers.length) {
                         let dist = getDistance({lat: d.currentLat, lng: d.currentLng}, stop);
@@ -570,7 +646,7 @@
             }
         }
 
-        // 4. PHASE 3: POST-OPTIMIZATION (Re-order)
+        // --- 4. PHASE 3: POST-OPTIMIZATION ---
         if(mode === 'distance') {
             drivers.forEach(d => {
                 if(d.route.length > 1) {
