@@ -94,7 +94,7 @@
                         <div class="input-group">
                             <span class="input-group-text">Mode</span>
                             <select id="optimize-mode" class="form-select fw-bold">
-                                <option value="distance">📏 Min Distance (Global)</option>
+                                <option value="distance">📏 Min Distance (Seeded)</option>
                                 <option value="time">⏱️ Fastest Time (Google)</option>
                             </select>
                         </div>
@@ -202,7 +202,7 @@
     let lastCalculatedDrivers = [];
     let myModal, debugModal, shareModal;
 
-    // --- DATA SAFETY FIX: Load immediately, do not wait for DOM ---
+    // --- DATA LOAD ---
     let driversData = JSON.parse(localStorage.getItem('driversData')) || [];
     let passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
 
@@ -463,7 +463,7 @@
         debugModal.show();
     }
 
-    // --- ALGORITHM: GLOBAL CLOSEST + GROUP INTEGRITY ---
+    // --- ALGORITHM: SEED & GROW (With Atomic Groups) ---
     function calculateSmartRoutes() {
         const timeInput = document.getElementById('target-time').value;
         const mode = document.getElementById('optimize-mode').value; 
@@ -492,86 +492,83 @@
             stops.push(stop);
         }
 
-        // 2. Assign (Priority: Shortest Distance where Whole Group Fits)
-        // We do NOT sort by size. We search for the *closest pair* available.
-        while(stops.length > 0) {
-            let bestDriver = null;
-            let bestStopIdx = -1;
-            let minDistance = Infinity;
-            let foundFullFit = false;
+        // 2. PHASE 1: SEEDING
+        // For every empty driver, find their absolute nearest stop to start the route
+        // We do this by creating all possible (Driver, Stop) pairs, sorting by distance, and assigning.
+        let seedPairs = [];
+        drivers.forEach((d, dIdx) => {
+            stops.forEach((s, sIdx) => {
+                // Constraint: Capacity check (Atomic Group)
+                if (d.capacity >= s.passengers.length) {
+                    seedPairs.push({
+                        dist: getDistance({lat: d.lat, lng: d.lng}, s),
+                        dIdx: dIdx,
+                        sIdx: sIdx
+                    });
+                }
+            });
+        });
+        seedPairs.sort((a, b) => a.dist - b.dist);
 
-            // Pass 1: Look for closest pair where WHOLE group fits
-            for(let sIdx = 0; sIdx < stops.length; sIdx++) {
-                let stop = stops[sIdx];
-                let groupSize = stop.passengers.length;
-
-                drivers.forEach(d => {
-                    let seatsLeft = d.capacity - d.currentLoad;
-                    if(seatsLeft >= groupSize) { // Capacity Check (Fit All)
-                        let dist = getDistance({lat: d.currentLat, lng: d.currentLng}, stop);
-                        if(dist < minDistance) {
-                            minDistance = dist;
-                            bestDriver = d;
-                            bestStopIdx = sIdx;
-                            foundFullFit = true;
-                        }
-                    }
-                });
+        // Assign seeds
+        seedPairs.forEach(pair => {
+            let d = drivers[pair.dIdx];
+            let stop = stops[pair.sIdx];
+            
+            // Only assign if driver is empty AND stop is not taken
+            if (d.route.length === 0 && !stop.assigned) {
+                stop.assigned = true;
+                d.route.push(stop);
+                d.currentLoad += stop.passengers.length;
+                d.currentLat = stop.lat;
+                d.currentLng = stop.lng;
             }
+        });
 
-            // Pass 2: If NO one fits a whole group, find closest partial fit
-            if(!bestDriver) {
-                 minDistance = Infinity; // Reset
-                 for(let sIdx = 0; sIdx < stops.length; sIdx++) {
-                    let stop = stops[sIdx];
-                    drivers.forEach(d => {
-                        let seatsLeft = d.capacity - d.currentLoad;
-                        if(seatsLeft > 0) { // Capacity Check (Fit Any)
+        // 3. PHASE 2: EXPANSION (GREEDY NEXT HOP)
+        // Now loop until all stops are assigned
+        let active = true;
+        while(active) {
+            active = false;
+            let bestMove = null;
+            let minDist = Infinity;
+
+            // Iterate through all drivers who have space
+            drivers.forEach(d => {
+                let seatsLeft = d.capacity - d.currentLoad;
+                if (seatsLeft > 0) {
+                    // Find closest unassigned stop
+                    stops.forEach((stop, sIdx) => {
+                        if(!stop.assigned && seatsLeft >= stop.passengers.length) {
                             let dist = getDistance({lat: d.currentLat, lng: d.currentLng}, stop);
-                            if(dist < minDistance) {
-                                minDistance = dist;
-                                bestDriver = d;
-                                bestStopIdx = sIdx;
-                                foundFullFit = false;
+                            if(dist < minDist) {
+                                minDist = dist;
+                                bestMove = { driver: d, stop: stop };
                             }
                         }
                     });
                 }
-            }
+            });
 
-            // Apply Assignment
-            if(bestDriver && bestStopIdx > -1) {
-                let stop = stops[bestStopIdx];
-                let seatsLeft = bestDriver.capacity - bestDriver.currentLoad;
-                
-                if(foundFullFit) {
-                    // Fit everyone
-                    bestDriver.route.push(stop);
-                    bestDriver.currentLoad += stop.passengers.length;
-                    bestDriver.currentLat = stop.lat;
-                    bestDriver.currentLng = stop.lng;
-                    stops.splice(bestStopIdx, 1);
-                } else {
-                    // Split group
-                    let fitPeople = stop.passengers.splice(0, seatsLeft);
-                    let partialStop = { lat: stop.lat, lng: stop.lng, address: stop.address, passengers: fitPeople };
-                    bestDriver.route.push(partialStop);
-                    bestDriver.currentLoad += fitPeople.length;
-                    bestDriver.currentLat = stop.lat;
-                    bestDriver.currentLng = stop.lng;
-                    // Remaining 'stop' stays in the array
-                }
-            } else {
-                break; // Leftovers (shouldn't happen unless cars are full)
+            if(bestMove) {
+                bestMove.stop.assigned = true;
+                bestMove.driver.route.push(bestMove.stop);
+                bestMove.driver.currentLoad += bestMove.stop.passengers.length;
+                bestMove.driver.currentLat = bestMove.stop.lat;
+                bestMove.driver.currentLng = bestMove.stop.lng;
+                active = true; // Continue loop
             }
         }
 
-        // 3. Post-Process: Greedy Sort if needed (Distance Mode)
+        // 4. Collect Unassigned Stops for Reporting
+        let leftoverStops = stops.filter(s => !s.assigned);
+
+        // 5. Post-Process Reordering (if Distance Mode selected)
         if(mode === 'distance') {
             drivers.forEach(d => {
                 if(d.route.length > 1) {
                     let sorted = [];
-                    let curr = { lat: d.lat, lng: d.lng };
+                    let curr = { lat: d.lat, lng: d.lng }; // Start from Home
                     let rem = [...d.route];
                     while(rem.length > 0) {
                         let closestIdx = 0;
@@ -590,7 +587,7 @@
         }
 
         lastCalculatedDrivers = drivers;
-        displayResults(drivers, stops, timeInput, mode, stopDuration);
+        displayResults(drivers, leftoverStops, timeInput, mode, stopDuration);
     }
 
     function displayResults(drivers, leftoverStops, timeInput, mode, stopDuration) {
