@@ -202,7 +202,7 @@
     let lastCalculatedDrivers = [];
     let myModal, debugModal, shareModal;
 
-    // --- DATA LOAD ---
+    // --- DATA SAFETY FIX: Load immediately ---
     let driversData = JSON.parse(localStorage.getItem('driversData')) || [];
     let passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
 
@@ -214,7 +214,7 @@
         if(m2) debugModal = new bootstrap.Modal(m2);
         if(m3) shareModal = new bootstrap.Modal(m3);
         
-        checkUrlForData(); 
+        checkUrlForData();
         renderLists();
     });
 
@@ -259,7 +259,7 @@
             } catch(e) {
                 console.error("Link Error:", e);
                 const errBox = document.getElementById('error-container');
-                errBox.innerText = "⚠️ Link Error: Could not read data from URL. Using saved local data instead.";
+                errBox.innerText = "⚠️ Link Error: Using local backup.";
                 errBox.classList.remove('d-none');
             }
         }
@@ -463,7 +463,7 @@
         debugModal.show();
     }
 
-    // --- ALGORITHM: SEED & GROW (With Atomic Groups) ---
+    // --- ALGORITHM: SEED & GROW (Strict Phases) ---
     function calculateSmartRoutes() {
         const timeInput = document.getElementById('target-time').value;
         const mode = document.getElementById('optimize-mode').value; 
@@ -478,11 +478,11 @@
         if(drivers.length === 0 || rawPassengers.length === 0) return alert("Need active drivers and passengers.");
         if(drivers.some(d => isNaN(d.lat)) || rawPassengers.some(p => isNaN(p.lat))) return alert("CRITICAL: Fix GPS errors.");
 
-        // 1. Group by 10m rule
+        // 1. PRE-PROCESS: GROUPING (10m)
         let stops = [];
         while(rawPassengers.length > 0) {
             let p = rawPassengers.pop();
-            let stop = { lat: p.lat, lng: p.lng, address: p.address, passengers: [p] };
+            let stop = { lat: p.lat, lng: p.lng, address: p.address, passengers: [p], assigned: false };
             for(let i = rawPassengers.length - 1; i >= 0; i--) {
                 if(getDistance(p, rawPassengers[i]) < 0.01) {
                     stop.passengers.push(rawPassengers[i]);
@@ -493,13 +493,12 @@
         }
 
         // 2. PHASE 1: SEEDING
-        // For every empty driver, find their absolute nearest stop to start the route
-        // We do this by creating all possible (Driver, Stop) pairs, sorting by distance, and assigning.
+        // For every empty driver, find their SINGLE nearest stop.
+        // Sort all potential (Driver, Stop) pairs by distance to ensure global optimality.
         let seedPairs = [];
         drivers.forEach((d, dIdx) => {
             stops.forEach((s, sIdx) => {
-                // Constraint: Capacity check (Atomic Group)
-                if (d.capacity >= s.passengers.length) {
+                if (d.capacity >= s.passengers.length) { // Strict Capacity Check
                     seedPairs.push({
                         dist: getDistance({lat: d.lat, lng: d.lng}, s),
                         dIdx: dIdx,
@@ -510,12 +509,10 @@
         });
         seedPairs.sort((a, b) => a.dist - b.dist);
 
-        // Assign seeds
+        // Assign Seeds (1 per driver max)
         seedPairs.forEach(pair => {
             let d = drivers[pair.dIdx];
             let stop = stops[pair.sIdx];
-            
-            // Only assign if driver is empty AND stop is not taken
             if (d.route.length === 0 && !stop.assigned) {
                 stop.assigned = true;
                 d.route.push(stop);
@@ -525,23 +522,23 @@
             }
         });
 
-        // 3. PHASE 2: EXPANSION (GREEDY NEXT HOP)
-        // Now loop until all stops are assigned
+        // 3. PHASE 2: EXPANSION (CHAINING)
+        // Drivers now look for the next nearest stop from their CURRENT location
         let active = true;
         while(active) {
             active = false;
             let bestMove = null;
             let minDist = Infinity;
 
-            // Iterate through all drivers who have space
+            // Iterate over all drivers who have space
             drivers.forEach(d => {
                 let seatsLeft = d.capacity - d.currentLoad;
                 if (seatsLeft > 0) {
-                    // Find closest unassigned stop
                     stops.forEach((stop, sIdx) => {
-                        if(!stop.assigned && seatsLeft >= stop.passengers.length) {
+                        if (!stop.assigned && seatsLeft >= stop.passengers.length) {
+                            // Distance from driver's LAST STOP (currentLat)
                             let dist = getDistance({lat: d.currentLat, lng: d.currentLng}, stop);
-                            if(dist < minDist) {
+                            if (dist < minDist) {
                                 minDist = dist;
                                 bestMove = { driver: d, stop: stop };
                             }
@@ -550,20 +547,20 @@
                 }
             });
 
-            if(bestMove) {
+            if (bestMove) {
                 bestMove.stop.assigned = true;
                 bestMove.driver.route.push(bestMove.stop);
                 bestMove.driver.currentLoad += bestMove.stop.passengers.length;
                 bestMove.driver.currentLat = bestMove.stop.lat;
                 bestMove.driver.currentLng = bestMove.stop.lng;
-                active = true; // Continue loop
+                active = true; // Continue until no one can move
             }
         }
 
-        // 4. Collect Unassigned Stops for Reporting
+        // 4. Collect Unassigned
         let leftoverStops = stops.filter(s => !s.assigned);
 
-        // 5. Post-Process Reordering (if Distance Mode selected)
+        // 5. Post-Process (Distance Mode Only)
         if(mode === 'distance') {
             drivers.forEach(d => {
                 if(d.route.length > 1) {
