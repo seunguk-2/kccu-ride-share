@@ -94,7 +94,7 @@
                         <div class="input-group">
                             <span class="input-group-text">Mode</span>
                             <select id="optimize-mode" class="form-select fw-bold">
-                                <option value="distance">📏 Min Distance (Post-Sort)</option>
+                                <option value="distance">📏 Min Distance (Reorder)</option>
                                 <option value="time">⏱️ Fastest Time (Google)</option>
                             </select>
                         </div>
@@ -462,7 +462,7 @@
         debugModal.show();
     }
 
-    // --- 4-STAGE ALGORITHM ---
+    // --- 4-STAGE ALGORITHM (With Directional Seeding) ---
     function calculateSmartRoutes() {
         const timeInput = document.getElementById('target-time').value;
         const mode = document.getElementById('optimize-mode').value; 
@@ -471,14 +471,13 @@
         if(!timeInput) return alert("Set arrival time.");
         if(window.google) { routeRenderers.forEach(r => r.setMap(null)); routeRenderers = []; }
 
-        // Drivers carry 'totalDist' to track accumulated trip length
         let drivers = driversData.filter(d => d.active).map(d => ({ ...d, route: [], currentLoad: 0, currentLat: d.lat, currentLng: d.lng, totalDist: 0 }));
         let rawPassengers = passengersData.filter(p => p.active).map(p => ({...p}));
 
         if(drivers.length === 0 || rawPassengers.length === 0) return alert("Need active drivers and passengers.");
         if(drivers.some(d => isNaN(d.lat)) || rawPassengers.some(p => isNaN(p.lat))) return alert("CRITICAL: Fix GPS errors.");
 
-        // 1. ATOMIC GROUPING (10m) - Strictly inseparable
+        // 1. ATOMIC GROUPING (10m)
         let stops = [];
         while(rawPassengers.length > 0) {
             let p = rawPassengers.pop();
@@ -492,22 +491,37 @@
             stops.push(stop);
         }
 
-        // 2. PHASE 1: SEEDING (Anchor each driver to NEAREST stop)
+        // 2. PHASE 1: DIRECTIONAL SEEDING (The Proxy for Time)
+        // We score stops. Lower score = Better seed.
+        // Score = Distance + Penalty for Backtracking.
         let seedPairs = [];
         drivers.forEach((d, dIdx) => {
+            let distDriverToChurch = getDistance({lat: d.lat, lng: d.lng}, CHURCH_LOCATION);
+            
             stops.forEach((s, sIdx) => {
                 if (d.capacity >= s.passengers.length) {
+                    let distDriverToStop = getDistance({lat: d.lat, lng: d.lng}, s);
+                    let distStopToChurch = getDistance(s, CHURCH_LOCATION);
+                    
+                    // Directional Logic:
+                    // If stop is further from church than driver, it's a "backtrack".
+                    // We apply a 1.5x penalty to the distance in that case.
+                    let weightedDist = distDriverToStop;
+                    if(distStopToChurch > distDriverToChurch) {
+                        weightedDist = distDriverToStop * 1.5; 
+                    }
+
                     seedPairs.push({
-                        dist: getDistance({lat: d.lat, lng: d.lng}, s),
+                        score: weightedDist,
                         dIdx: dIdx,
                         sIdx: sIdx
                     });
                 }
             });
         });
-        seedPairs.sort((a, b) => a.dist - b.dist);
+        seedPairs.sort((a, b) => a.score - b.score);
 
-        // Assign Seeds (1 per driver max)
+        // Assign Seeds
         seedPairs.forEach(pair => {
             let d = drivers[pair.dIdx];
             let stop = stops[pair.sIdx];
@@ -517,24 +531,21 @@
                 d.currentLoad += stop.passengers.length;
                 d.currentLat = stop.lat;
                 d.currentLng = stop.lng;
-                d.totalDist += pair.dist;
+                d.totalDist += getDistance({lat: d.lat, lng: d.lng}, stop);
             }
         });
 
-        // 3. PHASE 2: EXPANSION (Priority to Longest Hauler)
+        // 3. PHASE 2: EXPANSION (Longest Hauler Priority)
         let active = true;
         while(active) {
             active = false;
-            
-            // Priority: Driver who has traveled MOST gets to pick next (prevents starvation)
             let activeDrivers = drivers.filter(d => (d.capacity - d.currentLoad) > 0);
-            activeDrivers.sort((a, b) => b.totalDist - a.totalDist);
+            activeDrivers.sort((a, b) => b.totalDist - a.totalDist); // Longest first
 
             for(let d of activeDrivers) {
                 let bestStop = null;
                 let minDist = Infinity;
 
-                // Find nearest unassigned stop relative to driver's CURRENT location
                 let seatsLeft = d.capacity - d.currentLoad;
                 stops.forEach(stop => {
                     if(!stop.assigned && seatsLeft >= stop.passengers.length) {
@@ -553,39 +564,31 @@
                     d.currentLat = bestStop.lat;
                     d.currentLng = bestStop.lng;
                     d.totalDist += minDist;
-                    active = true; // Loop again to re-evaluate priorities
+                    active = true; 
                     break; 
                 }
             }
         }
 
-        // 4. PHASE 3: POST-OPTIMIZATION (Re-order stops for shortest path)
-        // Only if using "Distance" mode. Google handles "Time" mode.
+        // 4. PHASE 3: POST-OPTIMIZATION (Re-order)
         if(mode === 'distance') {
             drivers.forEach(d => {
                 if(d.route.length > 1) {
-                    // Greedy Path Sort: Start at Home, find closest, then closest from there...
-                    let optimizedRoute = [];
-                    let currentLocation = { lat: d.lat, lng: d.lng }; // Driver Home
-                    let remainingStops = [...d.route];
-
-                    while(remainingStops.length > 0) {
-                        let nearestIdx = 0;
-                        let nearestDist = Infinity;
-
-                        for(let i=0; i<remainingStops.length; i++) {
-                            let dist = getDistance(currentLocation, remainingStops[i]);
-                            if(dist < nearestDist) {
-                                nearestDist = dist;
-                                nearestIdx = i;
-                            }
+                    let sorted = [];
+                    let curr = { lat: d.lat, lng: d.lng };
+                    let rem = [...d.route];
+                    while(rem.length > 0) {
+                        let closestIdx = 0;
+                        let minD = Infinity;
+                        for(let i=0; i<rem.length; i++) {
+                            let dist = getDistance(curr, rem[i]);
+                            if(dist < minD) { minD = dist; closestIdx = i; }
                         }
-                        
-                        let nextStop = remainingStops.splice(nearestIdx, 1)[0];
-                        optimizedRoute.push(nextStop);
-                        currentLocation = { lat: nextStop.lat, lng: nextStop.lng };
+                        let next = rem.splice(closestIdx, 1)[0];
+                        sorted.push(next);
+                        curr = { lat: next.lat, lng: next.lng };
                     }
-                    d.route = optimizedRoute;
+                    d.route = sorted;
                 }
             });
         }
@@ -645,10 +648,7 @@
             <div class="d-flex justify-content-between"><h5><span style="color:${color}">🚘</span> ${d.name} <span class="badge bg-secondary">${d.currentLoad}/${d.capacity}</span></h5>
             <div class="text-end"><span class="text-muted">Depart:</span><br><span class="dep-time">${depTimeStr}</span></div></div><hr><ul class="list-unstyled">`;
         
-        // If Google Optimized is OFF (Distance mode), order is null/default, so we use our own sorted d.route order.
-        // If Google Optimized is ON (Time mode), we MUST follow Google's 'order' array.
         if(!order || order.length === 0) order = d.route.map((_, i) => i);
-        
         order.forEach((idx, i) => {
             let stop = d.route[idx];
             let names = stop.passengers.map(p => p.name).join(" & ");
