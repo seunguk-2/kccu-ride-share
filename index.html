@@ -200,9 +200,11 @@
     let map, geocoder, directionsService;
     let routeRenderers = []; 
     let lastCalculatedDrivers = [];
-    let driversData = [];
-    let passengersData = [];
     let myModal, debugModal, shareModal;
+
+    // --- DATA SAFETY FIX: Load immediately, do not wait for DOM ---
+    let driversData = JSON.parse(localStorage.getItem('driversData')) || [];
+    let passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
 
     document.addEventListener("DOMContentLoaded", function() {
         const m1 = document.getElementById('addPersonModal');
@@ -211,7 +213,8 @@
         if(m1) myModal = new bootstrap.Modal(m1);
         if(m2) debugModal = new bootstrap.Modal(m2);
         if(m3) shareModal = new bootstrap.Modal(m3);
-        loadData();
+        
+        checkUrlForData(); // Only OVERWRITE if URL exists
         renderLists();
     });
 
@@ -227,38 +230,43 @@
         return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
     }
 
-    function loadData() {
+    function checkUrlForData() {
         const urlParams = new URLSearchParams(window.location.search);
         let rawData = urlParams.get('data');
         if(rawData) {
             try {
                 if(rawData.includes(' ') && !rawData.includes('+')) rawData = rawData.replace(/ /g, '+');
-                const jsonString = safeAtob(rawData);
-                const decoded = JSON.parse(jsonString);
-                driversData = decoded.d || [];
-                passengersData = decoded.p || [];
-                localStorage.setItem('driversData', JSON.stringify(driversData));
-                localStorage.setItem('passengersData', JSON.stringify(passengersData));
-                window.history.replaceState({}, document.title, window.location.pathname);
-            } catch(e) {
-                // Fallback for older links or LZ links
+                
+                let jsonString;
+                // Try decompressing first
                 try {
                     const decompressed = LZString.decompressFromEncodedURIComponent(rawData);
-                    if(decompressed) {
-                        const decoded = JSON.parse(decompressed);
-                        driversData = decoded.d || [];
-                        passengersData = decoded.p || [];
-                        localStorage.setItem('driversData', JSON.stringify(driversData));
-                        localStorage.setItem('passengersData', JSON.stringify(passengersData));
-                    }
-                } catch(e2) {
-                    driversData = JSON.parse(localStorage.getItem('driversData')) || [];
-                    passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
+                    if(decompressed) jsonString = decompressed;
+                } catch(e) {}
+
+                // Fallback to legacy base64 if needed
+                if(!jsonString) {
+                    try { rawData = decodeURIComponent(rawData); } catch(e){}
+                    jsonString = safeAtob(rawData);
                 }
+
+                if(jsonString) {
+                    const decoded = JSON.parse(jsonString);
+                    driversData = decoded.d || [];
+                    passengersData = decoded.p || [];
+                    // Update Local Storage immediately
+                    localStorage.setItem('driversData', JSON.stringify(driversData));
+                    localStorage.setItem('passengersData', JSON.stringify(passengersData));
+                    // Clean URL
+                    window.history.replaceState({}, document.title, window.location.pathname);
+                }
+            } catch(e) {
+                console.error("Link Error:", e);
+                // Do NOT wipe data here. Just alert.
+                const errBox = document.getElementById('error-container');
+                errBox.innerText = "⚠️ Link Error: Could not read data from URL. Using saved local data instead.";
+                errBox.classList.remove('d-none');
             }
-        } else {
-            driversData = JSON.parse(localStorage.getItem('driversData')) || [];
-            passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
         }
     }
 
@@ -301,6 +309,8 @@
         dList.innerHTML = ''; pList.innerHTML = '';
         driversData.forEach((d, idx) => dList.innerHTML += createRow(d, idx, 'driver'));
         passengersData.forEach((p, idx) => pList.innerHTML += createRow(p, idx, 'passenger'));
+        
+        // Save to ensure sync
         localStorage.setItem('driversData', JSON.stringify(driversData));
         localStorage.setItem('passengersData', JSON.stringify(passengersData));
         filterLists();
@@ -489,26 +499,20 @@
         }
 
         // 2. Global Nearest Neighbor Assignment
-        // Loop until all stops are assigned or all cars are full
         while(stops.length > 0) {
             let bestDriver = null;
             let bestStopIdx = -1;
             let minDistance = Infinity;
 
-            // Search the ENTIRE matrix of (Drivers x Stops) for the shortest possible link
             for(let sIdx = 0; sIdx < stops.length; sIdx++) {
                 let stop = stops[sIdx];
                 let groupSize = stop.passengers.length;
 
                 drivers.forEach(d => {
                     let seatsLeft = d.capacity - d.currentLoad;
-                    // Strict rule: We prefer to fit the whole group.
-                    // If no one can fit the whole group, we will split later.
                     if(seatsLeft > 0) {
                         let dist = getDistance({lat: d.currentLat, lng: d.currentLng}, stop);
                         if(dist < minDistance) {
-                            // HEURISTIC: If car can't fit everyone, penalize the distance score slightly
-                            // to prefer cars that CAN fit everyone.
                             let penalty = (seatsLeft < groupSize) ? 5.0 : 1.0; 
                             if(dist * penalty < minDistance) {
                                 minDistance = dist;
@@ -525,24 +529,21 @@
                 let seatsLeft = bestDriver.capacity - bestDriver.currentLoad;
                 
                 if(seatsLeft >= stop.passengers.length) {
-                    // Fit everyone
                     bestDriver.route.push(stop);
                     bestDriver.currentLoad += stop.passengers.length;
                     bestDriver.currentLat = stop.lat;
                     bestDriver.currentLng = stop.lng;
                     stops.splice(bestStopIdx, 1);
                 } else {
-                    // Split group
                     let fitPeople = stop.passengers.splice(0, seatsLeft);
                     let partialStop = { lat: stop.lat, lng: stop.lng, address: stop.address, passengers: fitPeople };
                     bestDriver.route.push(partialStop);
                     bestDriver.currentLoad += fitPeople.length;
                     bestDriver.currentLat = stop.lat;
                     bestDriver.currentLng = stop.lng;
-                    // Remaining 'stop' stays in the array to be picked up next loop
                 }
             } else {
-                break; // No one fits anywhere
+                break; 
             }
         }
 
@@ -632,7 +633,7 @@
         html += `</ul></div>`;
         document.getElementById('routes-list').innerHTML += html;
     }
-
+    
 <script
     src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCH4mU6UnzIey7YtHyOg9TPaxX4K1SzpzA&callback=initMap&libraries=places&v=weekly"
     defer
