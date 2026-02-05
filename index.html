@@ -94,7 +94,7 @@
                         <div class="input-group">
                             <span class="input-group-text">Mode</span>
                             <select id="optimize-mode" class="form-select fw-bold">
-                                <option value="distance">📏 Min Distance (Global)</option>
+                                <option value="distance">📏 Min Distance (Reorder)</option>
                                 <option value="time">⏱️ Fastest Time (Google)</option>
                             </select>
                         </div>
@@ -469,7 +469,7 @@
         debugModal.show();
     }
 
-    // --- ALGORITHM: GLOBAL MIN-DISTANCE ASSIGNMENT ---
+    // --- ALGORITHM: FIXED GROUP PRIORITY ---
     function calculateSmartRoutes() {
         const timeInput = document.getElementById('target-time').value;
         const mode = document.getElementById('optimize-mode').value; 
@@ -498,56 +498,61 @@
             stops.push(stop);
         }
 
-        // 2. Global Nearest Neighbor Assignment
+        // 2. Sort by Group Size (Largest Groups First)
+        stops.sort((a, b) => b.passengers.length - a.passengers.length);
+
+        // 3. Assign Groups to Drivers (Priority: Fit Whole Group -> Closest Distance)
         while(stops.length > 0) {
+            let stop = stops.shift(); // Get biggest group
+            
             let bestDriver = null;
-            let bestStopIdx = -1;
             let minDistance = Infinity;
 
-            for(let sIdx = 0; sIdx < stops.length; sIdx++) {
-                let stop = stops[sIdx];
-                let groupSize = stop.passengers.length;
-
-                drivers.forEach(d => {
-                    let seatsLeft = d.capacity - d.currentLoad;
-                    if(seatsLeft > 0) {
-                        let dist = getDistance({lat: d.currentLat, lng: d.currentLng}, stop);
-                        if(dist < minDistance) {
-                            let penalty = (seatsLeft < groupSize) ? 5.0 : 1.0; 
-                            if(dist * penalty < minDistance) {
-                                minDistance = dist;
-                                bestDriver = d;
-                                bestStopIdx = sIdx;
-                            }
-                        }
-                    }
-                });
+            // Step A: Find drivers who can fit the ENTIRE group
+            let eligibleDrivers = drivers.filter(d => (d.capacity - d.currentLoad) >= stop.passengers.length);
+            
+            // Step B: Fallback - if no one fits the group, allow splitting
+            if(eligibleDrivers.length === 0) {
+                 eligibleDrivers = drivers.filter(d => (d.capacity - d.currentLoad) > 0);
             }
 
-            if(bestDriver && bestStopIdx > -1) {
-                let stop = stops[bestStopIdx];
+            // Step C: If literally no seats left, we are done
+            if(eligibleDrivers.length === 0) {
+                stops.unshift(stop); // Put back to mark as leftover
+                break;
+            }
+
+            // Step D: Find closest driver among eligible ones
+            eligibleDrivers.forEach(d => {
+                let dist = getDistance({lat: d.currentLat, lng: d.currentLng}, stop);
+                if(dist < minDistance) {
+                    minDistance = dist;
+                    bestDriver = d;
+                }
+            });
+
+            if(bestDriver) {
                 let seatsLeft = bestDriver.capacity - bestDriver.currentLoad;
-                
                 if(seatsLeft >= stop.passengers.length) {
+                    // Fit everyone
                     bestDriver.route.push(stop);
                     bestDriver.currentLoad += stop.passengers.length;
                     bestDriver.currentLat = stop.lat;
                     bestDriver.currentLng = stop.lng;
-                    stops.splice(bestStopIdx, 1);
                 } else {
+                    // Split group
                     let fitPeople = stop.passengers.splice(0, seatsLeft);
                     let partialStop = { lat: stop.lat, lng: stop.lng, address: stop.address, passengers: fitPeople };
                     bestDriver.route.push(partialStop);
                     bestDriver.currentLoad += fitPeople.length;
                     bestDriver.currentLat = stop.lat;
                     bestDriver.currentLng = stop.lng;
+                    stops.unshift(stop); // Put remainder back
                 }
-            } else {
-                break; 
             }
         }
 
-        // 3. Post-Process: Greedy Sort if needed
+        // 4. Post-Process: Greedy Sort if needed (Distance Mode)
         if(mode === 'distance') {
             drivers.forEach(d => {
                 if(d.route.length > 1) {
