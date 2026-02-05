@@ -10,7 +10,6 @@
         body { background-color: #f0f2f5; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
         .card { border: none; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 20px; }
         .header-bg { background: linear-gradient(135deg, #0d6efd, #0a58ca); color: white; padding: 2rem 0; margin-bottom: 2rem; }
-        
         .time-input {
             background: rgba(255, 255, 255, 0.2);
             border: 1px solid rgba(255, 255, 255, 0.4);
@@ -18,12 +17,10 @@
         }
         .time-input:focus { background: white; color: #0d6efd; outline: none; }
         .time-input::-webkit-calendar-picker-indicator { filter: invert(1); cursor: pointer; }
-
         .pac-container { z-index: 100000 !important; } 
         #map { height: 550px; width: 100%; border-radius: 12px; background-color: #e9ecef; }
         .inactive-row { opacity: 0.5; background-color: #f8f9fa; }
         .dep-time { font-size: 1.2rem; font-weight: bold; color: #d63384; }
-        
         .search-container { position: relative; }
         .search-icon { position: absolute; left: 15px; top: 10px; color: #aaa; }
         .search-input { padding-left: 40px; border-radius: 20px; }
@@ -48,13 +45,11 @@
 
     <div class="row">
         <div class="col-lg-5">
-            
             <div class="mb-3">
                 <div class="search-container mb-3">
                     <span class="search-icon">🔍</span>
                     <input type="text" id="search-box" class="form-control search-input" placeholder="Find name or address..." onkeyup="filterLists()">
                 </div>
-                
                 <div class="d-flex justify-content-between">
                     <button class="btn btn-sm btn-outline-primary" onclick="generateMagicLink()">🔗 Create Magic Link</button>
                     <button class="btn btn-sm btn-outline-danger" onclick="clearAllData()">🗑️ Reset</button>
@@ -99,8 +94,8 @@
                         <div class="input-group">
                             <span class="input-group-text">Mode</span>
                             <select id="optimize-mode" class="form-select fw-bold">
-                                <option value="time">⏱️ Fastest (Google)</option>
-                                <option value="distance">📏 Shortest (Greedy)</option>
+                                <option value="distance">📏 Min Distance (Global)</option>
+                                <option value="time">⏱️ Fastest Time (Google)</option>
                             </select>
                         </div>
                     </div>
@@ -157,9 +152,7 @@
                 </div>
                 <div class="mb-3">
                     <label>Address</label>
-                    <input type="text" class="form-control" id="entry-address" 
-                           placeholder="Start typing address..." autocomplete="off"
-                           oninput="wipeCoords()">
+                    <input type="text" class="form-control" id="entry-address" placeholder="Start typing address..." autocomplete="off" oninput="wipeCoords()">
                     <small id="addr-warning" class="text-muted">Start typing and <strong>click</strong> the dropdown suggestion.</small>
                 </div>
             </div>
@@ -203,19 +196,14 @@
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
 
 <script>
-    // --- 1. CONFIGURATION ---
     const CHURCH_LOCATION = { lat: 40.1106, lng: -88.2166, address: "608 W Green St, Urbana, IL 61801" };
-    
     let map, geocoder, directionsService;
     let routeRenderers = []; 
     let lastCalculatedDrivers = [];
-
     let driversData = [];
     let passengersData = [];
-    
     let myModal, debugModal, shareModal;
 
-    // --- 2. STARTUP LOGIC ---
     document.addEventListener("DOMContentLoaded", function() {
         const m1 = document.getElementById('addPersonModal');
         const m2 = document.getElementById('debugModal');
@@ -223,44 +211,50 @@
         if(m1) myModal = new bootstrap.Modal(m1);
         if(m2) debugModal = new bootstrap.Modal(m2);
         if(m3) shareModal = new bootstrap.Modal(m3);
-
         loadData();
         renderLists();
     });
 
+    // --- UTILS ---
+    function safeBtoa(str) { return btoa(encodeURIComponent(str).replace(/%([0-9A-F]{2})/g, (match, p1) => String.fromCharCode('0x' + p1))); }
+    function safeAtob(str) { return decodeURIComponent(atob(str).split('').map(c => '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2)).join('')); }
+    function getDistance(p1, p2) {
+        if(!p1.lat || !p2.lat) return 99999; 
+        const R = 6371; 
+        const dLat = (p2.lat - p1.lat) * Math.PI/180;
+        const dLon = (p2.lng - p1.lng) * Math.PI/180;
+        const a = Math.sin(dLat/2) * Math.sin(dLat/2) + Math.cos(p1.lat * Math.PI/180) * Math.cos(p2.lat * Math.PI/180) * Math.sin(dLon/2) * Math.sin(dLon/2);
+        return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
+    }
+
     function loadData() {
         const urlParams = new URLSearchParams(window.location.search);
         let rawData = urlParams.get('data');
-
         if(rawData) {
             try {
-                let jsonString;
-                const decompressed = LZString.decompressFromEncodedURIComponent(rawData);
-                
-                if (decompressed) {
-                    jsonString = decompressed;
-                } else {
-                    if(rawData.includes(' ') && !rawData.includes('+')) {
-                        rawData = rawData.replace(/ /g, '+');
-                    }
-                    try { rawData = decodeURIComponent(rawData); } catch(e){}
-                    jsonString = atob(rawData);
-                }
-
+                if(rawData.includes(' ') && !rawData.includes('+')) rawData = rawData.replace(/ /g, '+');
+                const jsonString = safeAtob(rawData);
                 const decoded = JSON.parse(jsonString);
                 driversData = decoded.d || [];
                 passengersData = decoded.p || [];
-                
                 localStorage.setItem('driversData', JSON.stringify(driversData));
                 localStorage.setItem('passengersData', JSON.stringify(passengersData));
                 window.history.replaceState({}, document.title, window.location.pathname);
             } catch(e) {
-                console.error("Link Error:", e);
-                const errBox = document.getElementById('error-container');
-                errBox.innerText = "⚠️ Link Corrupted. Loaded local backup.";
-                errBox.classList.remove('d-none');
-                driversData = JSON.parse(localStorage.getItem('driversData')) || [];
-                passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
+                // Fallback for older links or LZ links
+                try {
+                    const decompressed = LZString.decompressFromEncodedURIComponent(rawData);
+                    if(decompressed) {
+                        const decoded = JSON.parse(decompressed);
+                        driversData = decoded.d || [];
+                        passengersData = decoded.p || [];
+                        localStorage.setItem('driversData', JSON.stringify(driversData));
+                        localStorage.setItem('passengersData', JSON.stringify(passengersData));
+                    }
+                } catch(e2) {
+                    driversData = JSON.parse(localStorage.getItem('driversData')) || [];
+                    passengersData = JSON.parse(localStorage.getItem('passengersData')) || [];
+                }
             }
         } else {
             driversData = JSON.parse(localStorage.getItem('driversData')) || [];
@@ -268,24 +262,19 @@
         }
     }
 
-    // --- 3. MAP INITIALIZATION ---
     function initMap() {
         try {
             const champaign = { lat: 40.1106, lng: -88.225 };
             map = new google.maps.Map(document.getElementById("map"), { zoom: 14, center: champaign });
             directionsService = new google.maps.DirectionsService();
             enableAutocomplete('entry-address');
-        } catch(e) {
-            console.error("Map failed to load:", e);
-        }
+        } catch(e) { console.error("Map failed to load:", e); }
     }
 
     function enableAutocomplete(id) {
         const input = document.getElementById(id);
         if(!input || !window.google) return;
-        const options = { componentRestrictions: { country: "us" }, fields: ["formatted_address", "geometry", "name"] };
-        const autocomplete = new google.maps.places.Autocomplete(input, options);
-        
+        const autocomplete = new google.maps.places.Autocomplete(input, { componentRestrictions: { country: "us" }, fields: ["formatted_address", "geometry", "name"] });
         autocomplete.addListener('place_changed', () => {
             const place = autocomplete.getPlace();
             if(place.formatted_address) {
@@ -305,17 +294,13 @@
         document.getElementById('addr-warning').innerHTML = '<span class="text-danger">⚠️ Unsaved changes. Please select from dropdown.</span>';
     }
 
-    // --- 4. LIST MANAGEMENT & SEARCH ---
     function renderLists() {
         const dList = document.getElementById('drivers-list-body');
         const pList = document.getElementById('passengers-list-body');
         if(!dList || !pList) return; 
-
         dList.innerHTML = ''; pList.innerHTML = '';
-
         driversData.forEach((d, idx) => dList.innerHTML += createRow(d, idx, 'driver'));
         passengersData.forEach((p, idx) => pList.innerHTML += createRow(p, idx, 'passenger'));
-        
         localStorage.setItem('driversData', JSON.stringify(driversData));
         localStorage.setItem('passengersData', JSON.stringify(passengersData));
         filterLists();
@@ -334,24 +319,16 @@
         const isChecked = item.active ? 'checked' : '';
         const rowClass = item.active ? '' : 'inactive-row';
         const info = type === 'driver' ? `<small>Cap: ${item.capacity}</small>` : '';
-        const hasGPS = (item.lat && item.lng && !isNaN(item.lat));
-        const geoStatus = hasGPS 
-            ? '<span class="text-success" title="GPS Locked">📍</span>' 
-            : '<span class="text-danger" title="NO GPS DATA! Please Edit and re-select address from dropdown">⚠️ BROKEN</span>';
-
+        const geoStatus = (item.lat && item.lng && !isNaN(item.lat)) ? '<span class="text-success" title="GPS Locked">📍</span>' : '<span class="text-danger" title="NO GPS DATA!">⚠️</span>';
         return `
             <tr class="${rowClass}">
                 <td style="width:10%"><div class="form-check form-switch"><input class="form-check-input" type="checkbox" ${isChecked} onchange="toggleActive('${type}', ${idx})"></div></td>
-                <td>
-                    <strong>${item.name}</strong> ${info} ${geoStatus}<br>
-                    <small class="text-muted text-truncate" style="max-width: 150px; display:block;">${item.address}</small>
-                </td>
+                <td><strong>${item.name}</strong> ${info} ${geoStatus}<br><small class="text-muted text-truncate" style="max-width: 150px; display:block;">${item.address}</small></td>
                 <td class="text-end" style="width:25%">
                     <button class="btn btn-sm btn-outline-secondary me-1" onclick="openModal('${type}', ${idx})">✏️</button>
                     <button class="btn btn-sm btn-outline-danger" onclick="deleteItem('${type}', ${idx})">×</button>
                 </td>
-            </tr>
-        `;
+            </tr>`;
     }
 
     function toggleActive(type, idx) {
@@ -381,7 +358,6 @@
         }
     }
 
-    // --- 5. MODAL LOGIC ---
     function openModal(type, index) {
         document.getElementById('entry-type').value = type;
         document.getElementById('entry-index').value = index;
@@ -389,14 +365,9 @@
         document.getElementById('entry-lat').value = '';
         document.getElementById('entry-lng').value = '';
         document.getElementById('addr-warning').innerHTML = 'Start typing and <strong>click</strong> the dropdown suggestion.';
-
-        if (index === -1) {
-            document.getElementById('modalTitle').innerText = "New " + (type==='driver'?'Driver':'Passenger');
-            document.getElementById('entry-name').value = '';
-            document.getElementById('entry-address').value = '';
-            document.getElementById('entry-cap').value = '4';
-        } else {
-            document.getElementById('modalTitle').innerText = "Edit " + (type==='driver'?'Driver':'Passenger');
+        document.getElementById('modalTitle').innerText = (index === -1) ? "New " + (type==='driver'?'Driver':'Passenger') : "Edit " + (type==='driver'?'Driver':'Passenger');
+        
+        if (index > -1) {
             const data = type === 'driver' ? driversData[index] : passengersData[index];
             document.getElementById('entry-name').value = data.name;
             document.getElementById('entry-address').value = data.address;
@@ -406,6 +377,10 @@
                 document.getElementById('addr-warning').innerHTML = '<span class="text-success">✅ GPS Coordinates Locked!</span>';
             }
             if (type === 'driver') document.getElementById('entry-cap').value = data.capacity;
+        } else {
+            document.getElementById('entry-name').value = '';
+            document.getElementById('entry-address').value = '';
+            document.getElementById('entry-cap').value = '4';
         }
         myModal.show();
     }
@@ -419,30 +394,19 @@
         const lng = parseFloat(document.getElementById('entry-lng').value);
 
         if(!name || !addr) return alert("Please fill in fields");
-        if(isNaN(lat) || isNaN(lng)) return alert("STOP: You typed an address but didn't click the Dropdown suggestion. The system doesn't know where this is. Please re-type and click the Google suggestion.");
+        if(isNaN(lat) || isNaN(lng)) return alert("STOP: GPS Missing. Please select address from dropdown.");
 
         const person = { name, address: addr, lat, lng, active: true };
-        
         if(type === 'driver') {
             person.capacity = parseInt(document.getElementById('entry-cap').value);
-            if (index === -1) driversData.push(person);
-            else {
-                person.active = driversData[index].active; 
-                driversData[index] = person;
-            }
+            if (index === -1) driversData.push(person); else { person.active = driversData[index].active; driversData[index] = person; }
         } else {
-            if (index === -1) passengersData.push(person);
-            else {
-                person.active = passengersData[index].active;
-                passengersData[index] = person;
-            }
+            if (index === -1) passengersData.push(person); else { person.active = passengersData[index].active; passengersData[index] = person; }
         }
         renderLists();
         myModal.hide();
     }
 
-    // --- 6. SHARING & UTILS ---
-    
     function generateMagicLink() {
         try {
             const payload = { d: driversData, p: passengersData };
@@ -450,185 +414,157 @@
             const compressed = LZString.compressToEncodedURIComponent(jsonString);
             const baseURL = window.location.origin + window.location.pathname;
             const magicLink = `${baseURL}?data=${compressed}`;
-            
             document.getElementById('share-text-area').value = magicLink;
             shareModal.show();
-            
             setTimeout(() => {
                 const ta = document.getElementById('share-text-area');
-                ta.select();
-                ta.setSelectionRange(0, 99999);
+                ta.select(); ta.setSelectionRange(0, 99999);
                 navigator.clipboard.writeText(magicLink).then(() => {
                     document.querySelector('#shareModal .alert').innerText = "✅ Link copied!";
                     document.querySelector('#shareModal .alert').className = "alert alert-success mt-2 mb-0";
-                }).catch(e => {
-                     document.querySelector('#shareModal .alert').innerText = "⚠️ Auto-copy failed. Copy manually.";
                 });
             }, 500);
-        } catch (e) {
-            alert("Crash during link generation: " + e.message);
-        }
+        } catch (e) { alert("Error: " + e.message); }
     }
 
     function generateShareText() {
         if(!lastCalculatedDrivers.length) return alert("Please generate a schedule first!");
-        
         let shareText = "📅 *Ride Plan*\n\n";
         lastCalculatedDrivers.forEach(d => {
             if(d.route.length > 0) {
                 let names = [];
-                d.route.forEach(stop => {
-                    stop.passengers.forEach(p => names.push(p.name));
-                });
+                d.route.forEach(stop => stop.passengers.forEach(p => names.push(p.name)));
                 shareText += `🚗 *${d.name}*: ${names.join(", ")}\n`;
             }
         });
-
         document.getElementById('share-text-area').value = shareText;
         shareModal.show();
-        
         setTimeout(() => {
             const ta = document.getElementById('share-text-area');
-            ta.select();
-            ta.setSelectionRange(0, 99999);
-            navigator.clipboard.writeText(shareText).catch(() => {});
+            ta.select(); ta.setSelectionRange(0, 99999);
+            navigator.clipboard.writeText(shareText);
         }, 500);
-    }
-    
-    function getDistance(p1, p2) {
-        if(!p1.lat || !p2.lat) return 99999; 
-        const R = 6371; 
-        const dLat = (p2.lat - p1.lat) * Math.PI/180;
-        const dLon = (p2.lng - p1.lng) * Math.PI/180;
-        const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-                  Math.cos(p1.lat * Math.PI/180) * Math.cos(p2.lat * Math.PI/180) * Math.sin(dLon/2) * Math.sin(dLon/2);
-        return R * (2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a)));
     }
     
     function showDebugModal() {
         let pool = passengersData.filter(p => p.active);
-        let txt = "";
-        if(pool.length < 2) txt = "Need at least 2 active passengers to compare distances.";
-        else {
-            for(let i=0; i<pool.length; i++) {
-                for(let j=i+1; j<pool.length; j++) {
-                    let d = getDistance(pool[i], pool[j]);
-                    let meters = Math.round(d * 1000); 
-                    txt += `${pool[i].name} ↔ ${pool[j].name} = ${meters}m\n`;
-                }
-                txt += "----------------\n";
+        let txt = pool.length < 2 ? "Need 2+ active passengers." : "";
+        for(let i=0; i<pool.length; i++) {
+            for(let j=i+1; j<pool.length; j++) {
+                let d = getDistance(pool[i], pool[j]);
+                txt += `${pool[i].name} ↔ ${pool[j].name} = ${Math.round(d * 1000)}m\n`;
             }
         }
         document.getElementById('debug-text-area').value = txt;
         debugModal.show();
     }
 
-    // --- 7. CORE ALGORITHM (GROUP FIRST) ---
-
+    // --- ALGORITHM: GLOBAL MIN-DISTANCE ASSIGNMENT ---
     function calculateSmartRoutes() {
         const timeInput = document.getElementById('target-time').value;
-        const mode = document.getElementById('optimize-mode').value;
-        // User-Configurable Stop Time (Default 30s)
+        const mode = document.getElementById('optimize-mode').value; 
         const stopDuration = parseInt(document.getElementById('stop-duration').value) || 30;
         
         if(!timeInput) return alert("Set arrival time.");
+        if(window.google) { routeRenderers.forEach(r => r.setMap(null)); routeRenderers = []; }
 
-        if(window.google) {
-            routeRenderers.forEach(r => r.setMap(null));
-            routeRenderers = [];
-        }
-
-        let drivers = driversData.filter(d => d.active).map(d => ({
-            ...d, route: [], currentLoad: 0, currentLat: d.lat, currentLng: d.lng
-        }));
-
+        let drivers = driversData.filter(d => d.active).map(d => ({ ...d, route: [], currentLoad: 0, currentLat: d.lat, currentLng: d.lng }));
         let rawPassengers = passengersData.filter(p => p.active).map(p => ({...p}));
 
-        if(drivers.length === 0) return alert("No active drivers!");
-        if(rawPassengers.length === 0) return alert("No active passengers!");
-        if(drivers.some(d => isNaN(d.lat)) || rawPassengers.some(p => isNaN(p.lat))) return alert("CRITICAL ERROR: Fix broken GPS entries marked with ⚠️.");
+        if(drivers.length === 0 || rawPassengers.length === 0) return alert("Need active drivers and passengers.");
+        if(drivers.some(d => isNaN(d.lat)) || rawPassengers.some(p => isNaN(p.lat))) return alert("CRITICAL: Fix GPS errors.");
 
-        // 1. Group Passengers (10m Rule)
+        // 1. Group by 10m rule
         let stops = [];
         while(rawPassengers.length > 0) {
             let p = rawPassengers.pop();
             let stop = { lat: p.lat, lng: p.lng, address: p.address, passengers: [p] };
-
             for(let i = rawPassengers.length - 1; i >= 0; i--) {
-                let other = rawPassengers[i];
-                if(getDistance(p, other) < 0.01) { // 10m
-                    stop.passengers.push(other);
+                if(getDistance(p, rawPassengers[i]) < 0.01) {
+                    stop.passengers.push(rawPassengers[i]);
                     rawPassengers.splice(i, 1);
                 }
             }
             stops.push(stop);
         }
-        stops.sort((a, b) => b.passengers.length - a.passengers.length);
 
-        // 2. Assign Groups to Drivers
+        // 2. Global Nearest Neighbor Assignment
+        // Loop until all stops are assigned or all cars are full
         while(stops.length > 0) {
-            let stop = stops.shift();
-            let groupSize = stop.passengers.length;
             let bestDriver = null;
+            let bestStopIdx = -1;
             let minDistance = Infinity;
 
-            let eligibleDrivers = drivers.filter(d => (d.capacity - d.currentLoad) >= groupSize);
-            if (eligibleDrivers.length === 0) {
-                eligibleDrivers = drivers.filter(d => (d.capacity - d.currentLoad) > 0);
+            // Search the ENTIRE matrix of (Drivers x Stops) for the shortest possible link
+            for(let sIdx = 0; sIdx < stops.length; sIdx++) {
+                let stop = stops[sIdx];
+                let groupSize = stop.passengers.length;
+
+                drivers.forEach(d => {
+                    let seatsLeft = d.capacity - d.currentLoad;
+                    // Strict rule: We prefer to fit the whole group.
+                    // If no one can fit the whole group, we will split later.
+                    if(seatsLeft > 0) {
+                        let dist = getDistance({lat: d.currentLat, lng: d.currentLng}, stop);
+                        if(dist < minDistance) {
+                            // HEURISTIC: If car can't fit everyone, penalize the distance score slightly
+                            // to prefer cars that CAN fit everyone.
+                            let penalty = (seatsLeft < groupSize) ? 5.0 : 1.0; 
+                            if(dist * penalty < minDistance) {
+                                minDistance = dist;
+                                bestDriver = d;
+                                bestStopIdx = sIdx;
+                            }
+                        }
+                    }
+                });
             }
 
-            if (eligibleDrivers.length === 0) {
-                stops.unshift(stop); 
-                break;
-            }
-
-            eligibleDrivers.forEach(d => {
-                let dist = getDistance({lat: d.currentLat, lng: d.currentLng}, stop);
-                if(dist < minDistance) {
-                    minDistance = dist;
-                    bestDriver = d;
-                }
-            });
-
-            if(bestDriver) {
-                let seatsAvailable = bestDriver.capacity - bestDriver.currentLoad;
-                if (seatsAvailable >= groupSize) {
+            if(bestDriver && bestStopIdx > -1) {
+                let stop = stops[bestStopIdx];
+                let seatsLeft = bestDriver.capacity - bestDriver.currentLoad;
+                
+                if(seatsLeft >= stop.passengers.length) {
+                    // Fit everyone
                     bestDriver.route.push(stop);
-                    bestDriver.currentLoad += groupSize;
+                    bestDriver.currentLoad += stop.passengers.length;
                     bestDriver.currentLat = stop.lat;
                     bestDriver.currentLng = stop.lng;
+                    stops.splice(bestStopIdx, 1);
                 } else {
-                    let fitPeople = stop.passengers.splice(0, seatsAvailable);
+                    // Split group
+                    let fitPeople = stop.passengers.splice(0, seatsLeft);
                     let partialStop = { lat: stop.lat, lng: stop.lng, address: stop.address, passengers: fitPeople };
                     bestDriver.route.push(partialStop);
                     bestDriver.currentLoad += fitPeople.length;
                     bestDriver.currentLat = stop.lat;
                     bestDriver.currentLng = stop.lng;
-                    stops.unshift(stop); 
+                    // Remaining 'stop' stays in the array to be picked up next loop
                 }
+            } else {
+                break; // No one fits anywhere
             }
         }
 
-        // 3. POST-PROCESSING (Greedy Sort for Distance Mode)
+        // 3. Post-Process: Greedy Sort if needed
         if(mode === 'distance') {
             drivers.forEach(d => {
                 if(d.route.length > 1) {
-                    let sortedRoute = [];
-                    let currentPos = { lat: d.lat, lng: d.lng };
-                    let remaining = [...d.route];
-
-                    while(remaining.length > 0) {
+                    let sorted = [];
+                    let curr = { lat: d.lat, lng: d.lng };
+                    let rem = [...d.route];
+                    while(rem.length > 0) {
                         let closestIdx = 0;
                         let minD = Infinity;
-                        for(let i=0; i<remaining.length; i++) {
-                            let dist = getDistance(currentPos, remaining[i]);
+                        for(let i=0; i<rem.length; i++) {
+                            let dist = getDistance(curr, rem[i]);
                             if(dist < minD) { minD = dist; closestIdx = i; }
                         }
-                        let nextStop = remaining.splice(closestIdx, 1)[0];
-                        sortedRoute.push(nextStop);
-                        currentPos = { lat: nextStop.lat, lng: nextStop.lng };
+                        let next = rem.splice(closestIdx, 1)[0];
+                        sorted.push(next);
+                        curr = { lat: next.lat, lng: next.lng };
                     }
-                    d.route = sortedRoute;
+                    d.route = sorted;
                 }
             });
         }
@@ -642,44 +578,30 @@
         const list = document.getElementById('routes-list');
         document.getElementById('results-area').style.display = 'block';
         list.innerHTML = '';
-
         const bounds = window.google ? new google.maps.LatLngBounds() : null;
         const colors = ["#0000FF", "#FF0000", "#008000", "#FFA500", "#800080", "#008080"];
-        
         const optimizeGoogle = (mode === 'time'); 
 
         drivers.forEach((d, dIdx) => {
             if(d.route.length === 0) return;
-
             const waypoints = d.route.map(stop => ({ location: stop.address, stopover: true }));
             
             if(window.google) {
                 directionsService.route({
-                    origin: d.address,
-                    destination: CHURCH_LOCATION.address,
-                    waypoints: waypoints,
-                    optimizeWaypoints: optimizeGoogle,
-                    travelMode: google.maps.TravelMode.DRIVING
+                    origin: d.address, destination: CHURCH_LOCATION.address, waypoints: waypoints,
+                    optimizeWaypoints: optimizeGoogle, travelMode: google.maps.TravelMode.DRIVING
                 }, (response, status) => {
                     if (status === "OK") {
                         const color = colors[dIdx % colors.length];
-                        const renderer = new google.maps.DirectionsRenderer({
-                            map: map, suppressMarkers: false, preserveViewport: true, 
-                            polylineOptions: { strokeColor: color, strokeWeight: 5 }
-                        });
+                        const renderer = new google.maps.DirectionsRenderer({ map: map, suppressMarkers: false, preserveViewport: true, polylineOptions: { strokeColor: color, strokeWeight: 5 } });
                         routeRenderers.push(renderer);
                         renderer.setDirections(response);
                         response.routes[0].bounds && bounds.union(response.routes[0].bounds);
                         map.fitBounds(bounds);
-
                         renderDriverCard(d, color, response.routes[0].legs, waypoints, tHour, tMin, false, response.routes[0].waypoint_order, stopDuration);
-                    } else {
-                        renderDriverCard(d, "#333", [], waypoints, tHour, tMin, true, [], stopDuration);
-                    }
+                    } else { renderDriverCard(d, "#333", [], waypoints, tHour, tMin, true, [], stopDuration); }
                 });
-            } else {
-                renderDriverCard(d, "#333", [], waypoints, tHour, tMin, true, [], stopDuration);
-            }
+            } else { renderDriverCard(d, "#333", [], waypoints, tHour, tMin, true, [], stopDuration); }
         });
         
         let leftoverCount = 0;
@@ -692,32 +614,16 @@
         if(!isError) {
             let totalSec = 0;
             legs.forEach(leg => totalSec += leg.duration.value);
-            // Apply User-Defined Stop Duration here
             totalSec += (waypoints.length * stopDuration); 
-            
-            const target = new Date();
-            target.setHours(tHour, tMin, 0, 0);
+            const target = new Date(); target.setHours(tHour, tMin, 0, 0);
             const depDate = new Date(target.getTime() - (totalSec * 1000));
             depTimeStr = depDate.toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
         }
-
-        let html = `
-            <div class="card p-3 border-start border-5" style="border-color: ${color} !important;">
-                <div class="d-flex justify-content-between">
-                    <h5><span style="color:${color}">🚘</span> ${d.name} <span class="badge bg-secondary">${d.currentLoad}/${d.capacity}</span></h5>
-                    <div class="text-end">
-                        <span class="text-muted">Depart:</span><br>
-                        <span class="dep-time">${depTimeStr}</span>
-                    </div>
-                </div>
-                <hr>
-                <ul class="list-unstyled">
-        `;
+        let html = `<div class="card p-3 border-start border-5" style="border-color: ${color} !important;">
+            <div class="d-flex justify-content-between"><h5><span style="color:${color}">🚘</span> ${d.name} <span class="badge bg-secondary">${d.currentLoad}/${d.capacity}</span></h5>
+            <div class="text-end"><span class="text-muted">Depart:</span><br><span class="dep-time">${depTimeStr}</span></div></div><hr><ul class="list-unstyled">`;
         
-        if(!order || order.length === 0) {
-            order = d.route.map((_, i) => i);
-        }
-
+        if(!order || order.length === 0) order = d.route.map((_, i) => i);
         order.forEach((idx, i) => {
             let stop = d.route[idx];
             let names = stop.passengers.map(p => p.name).join(" & ");
@@ -726,7 +632,6 @@
         html += `</ul></div>`;
         document.getElementById('routes-list').innerHTML += html;
     }
-</script>
 
 <script
     src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCH4mU6UnzIey7YtHyOg9TPaxX4K1SzpzA&callback=initMap&libraries=places&v=weekly"
